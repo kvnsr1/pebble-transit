@@ -1,99 +1,98 @@
-# Pebble Flight
+# Pebble Transit
 
-A Pebble Time 2 flight-status app inspired by the glanceable parts of Flighty. It shows route, date, local departure/arrival times, delay severity, and departure/arrival terminal and gate.
+Pebble Transit is a Pebble Time 2 companion for nearby public transportation. It mirrors the glanceable part of Transit’s Nearby screen: route branding, the nearest stop, direction, and a live departure countdown. A detail view shows the next three departures and the upcoming stops for the selected trip.
 
 ## Architecture
 
 - The native C watch app targets `emery` (Pebble Time 2).
-- PebbleKit JS runs in the Pebble phone app, calls FlightAware AeroAPI, caches the last successful response, and sends a compact message to the watch.
-- The settings page stores up to three flights, optional booking/seat details, and one AeroAPI key.
+- PebbleKit JS runs in the Pebble phone app, requests the phone’s current location, calls Transit’s stable v4 API, caches the last successful nearby response, and sends compact messages to the watch.
+- The hosted `config/` page controls Transit API credentials, nearby radius, API-provided transit mode classifications, and favorite lines.
+- Live nearby data is refreshed no more than once per minute while the app is open. The animated signal indicates a real-time prediction; `SCHED` indicates a static timetable departure.
 
-The watch itself does not have internet access, so the connected phone is required for fresh data. Gate and terminal values are shown as `--` when an airline/airport has not published them.
+The watch has no direct internet or GPS connection, so fresh data requires the paired phone. Cached departures remain visible through a temporary network or location failure.
 
-## Mac setup
+## Build
 
-This project is already set up at `~/Developer/pebble-flight` with private copies of Python 3.13, Node, and the Pebble command-line tool under `.tools/`. To build it without changing your Mac's system configuration:
+This separate repository retains Pebble Flight’s toolchain and deployment flow. From the project directory:
 
 ```sh
-cd ~/Developer/pebble-flight
 ./scripts/build.sh
 ```
 
-The finished package is `build/pebble-flight.pbw`.
+The finished package is `build/pebble-transit.pbw`.
 
-To build and launch it in the Pebble Time 2 emulator:
+To build and launch in the Pebble Time 2 emulator:
 
 ```sh
 ./scripts/build.sh
 ./scripts/emulator.sh
 ```
 
-For a fresh installation on another Mac, use the steps below.
+For a physical watch, enable **Dev Connect** in the Pebble mobile app and install using the address it provides. The legacy local-network form is:
 
-1. Install Homebrew if needed, then install current Python and Node:
+```sh
+pebble install --phone PHONE_IP
+```
 
-   ```sh
-   brew install python@3.13 node uv
-   ```
+## Transit API key
 
-2. Install the current Pebble command-line tool and SDK:
+The personal API key is kept in the ignored file `src/pkjs/private-key.js`; it is not committed. On a clean checkout, either open the phone settings page and enter a key, or supply one for the first build:
 
-   ```sh
-   uv tool install pebble-tool --python 3.13
-   pebble sdk install latest
-   ```
+```sh
+TRANSIT_API_KEY='your_key' ./scripts/build.sh
+```
 
-3. Build the app from this directory:
+The build script creates the ignored key module when it does not exist. To replace an existing bundled key, remove that local file and rebuild with `TRANSIT_API_KEY` set, or enter a replacement in phone settings. The settings page never receives the saved key; it only receives a boolean indicating that one exists.
 
-   ```sh
-   pebble build
-   ```
+Because PebbleKit JS makes requests from the phone, a credential bundled into a `.pbw` can ultimately be extracted. Use this design for a personal build. A broadly distributed build should send requests through a small authenticated proxy with its own per-user controls.
 
-4. Run it in the Time 2 emulator:
+Transit’s free access is currently limited to five requests per minute and 1,500 per month. Pebble Transit uses one `/nearby_routes` request per refresh, a weekly `/available_networks` discovery request, and an on-demand `/trip_details` request when a departure detail is opened.
 
-   ```sh
-   pebble install --emulator emery
-   ```
+## Publish the settings page
 
-   For a physical watch, enable **Dev Connect** in the Pebble mobile app, then use the install command shown by the app. The legacy local-network form is `pebble install --phone PHONE_IP`.
+The companion currently opens:
 
-## Connect live data
+```text
+https://kvnsr1.github.io/pebble-transit/config/
+```
 
-1. Create a FlightAware AeroAPI v4 Personal account and API key.
-2. Publish the `config/` folder as a static HTTPS site (GitHub Pages works).
-3. Replace `CONFIG_URL` near the top of `src/pkjs/index.js` with that HTTPS URL.
-4. Rebuild and install the app.
-5. Open Pebble Flight's settings in the phone app, then enter up to three IATA/ICAO flight identifiers such as `AA100`, their departure dates, and the key. Booking code, seat number, and window/middle/aisle position are optional per flight.
-
-For personal testing, the key is stored in the Pebble phone app's local storage and sent in AeroAPI's `x-apikey` header. It is never passed to the hosted settings page. Do not ship a public build this way: FlightAware does not support browser-side CORS requests and recommends a backend application server. Put AeroAPI behind a small serverless proxy so users cannot extract or abuse your key. FlightAware's current Personal terms are for personal/academic derivative use; a public consumer app requires the appropriate commercial tier.
+GitHub Pages publishes the settings page from this repository’s `main` branch. If the repository or host changes, update `CONFIG_URL` near the top of `src/pkjs/index.js`, publish the `config/` folder over HTTPS, then rebuild the app.
 
 ## Controls
 
-- **Up / Down:** move between Summary, Departure, Arrival, Aircraft, and Booking.
-- **Select:** refresh the visible flight.
-- **Long-press Select:** switch to the next saved flight.
+### Nearby line
+
+- **Up / Down:** move through nearby lines.
+- **Select:** switch direction.
+- **Hold Select:** open the selected line’s next-three-departures view.
+- **Hold Up:** pin or unpin the selected line. Nearby pinned lines sort first after the next refresh.
 - **Back:** exit.
 
-While the app is open, a lightweight five-minute heartbeat checks whether the visible flight is due for an AeroAPI update. Flights more than seven days away do not auto-refresh. From one to seven days, only the next flight refreshes every six hours; flights refresh hourly in the final 24 hours, every 15 minutes in the final six hours, and every 10 minutes while airborne. Canceled and completed flights stop refreshing, and landed flights leave the list after one hour. Select still forces a manual refresh for non-terminal flights.
+### Line details
 
-Opening the Aircraft page requests and caches up to two prior legs for the assigned registration. This is lazy-loaded and costs at most one additional `/flights/{registration}` result set per tracked flight (currently $0.005). AeroAPI Personal does not expose an individual airframe's original first-flight date, so that field remains unavailable rather than displaying an inferred date.
+- **Select:** cycle the highlighted departure among the next three.
+- **Up / Down:** toggle between the departure board and upcoming stops for the highlighted trip.
+- **Back:** return to nearby lines.
 
-Booking and seat details remain in the Pebble phone app's local storage. They are passed to the HTTPS configuration page in the URL fragment, which is not sent to the GitHub Pages host.
+Stop ETAs are based on the selected trip’s stop schedule and shifted by the selected departure’s current real-time offset when Transit marks that departure as live.
 
-## Delay rules
+## Configuration
 
-Before departure, severity is based on the latest gate-departure estimate versus schedule. Once the flight has departed, it switches to the latest arrival estimate versus schedule.
+Open Pebble Transit’s settings in the phone app to:
 
-- On time: no positive delay against the active schedule
-- Slight delay: 1–29 minutes
-- Delay: 30–60 minutes
-- Major delay: more than 60 minutes
-- Canceled/diverted flights override delay severity
+- enable or disable Transit’s localized mode classifications, including light rail, metro, commuter rail, bus, ferry, cable car, gondola, funicular, trolleybus, and monorail;
+- pin any lines found in the most recent nearby response;
+- choose a search radius from 150 to 1,500 metres; and
+- add or replace the Transit Public API key.
 
-## Test data mapping
+Mode names are initially seeded from the GTFS route classifications, then replaced or extended with the `mode_key` and localized `mode_name` values returned by `/available_networks` and `/nearby_routes`.
 
-If Node is installed, run:
+## Tests
+
+Run the data-mapping tests with:
 
 ```sh
-node test/flight.test.js
+node test/transit.test.js
 ```
+
+API reference: [Transit API v4](https://api-doc.transitapp.com/v4.html)

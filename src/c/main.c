@@ -1,77 +1,61 @@
 #include <pebble.h>
 
+#define STOP_LIMIT 5
+#define REFRESH_INTERVAL_MS (60 * 1000)
+#define ANIMATION_INTERVAL_MS 100
+
 typedef struct {
-  char flight[16];
-  char date[24];
-  char origin[8];
-  char destination[8];
-  char departure_time[16];
-  char arrival_time[16];
-  char status[32];
-  char departure_gate[12];
-  char departure_terminal[12];
-  char arrival_gate[12];
-  char arrival_terminal[12];
-  char updated[16];
-  char next_refresh[24];
-  char aircraft_model[28];
-  char aircraft_number[16];
-  char aircraft_first_flight[20];
-  char aircraft_leg_1[24];
-  char aircraft_leg_1_status[24];
-  char aircraft_leg_2[24];
-  char aircraft_leg_2_status[24];
-  char booking_code[16];
-  char seat_number[8];
-  char seat_position[12];
-  char error[84];
-  int status_level;
-  int aircraft_leg_1_level;
-  int aircraft_leg_2_level;
+  char route_name[16];
+  char route_long_name[40];
+  char headsign[40];
+  char stop_name[48];
+  char mode_name[24];
+  char updated[14];
+  char error[80];
+  char stop_names[STOP_LIMIT][38];
+  int32_t departures[3];
+  int32_t stop_times[STOP_LIMIT];
+  uint32_t route_color;
+  uint32_t text_color;
+  int line_index;
+  int line_count;
+  int mode_code;
+  int direction_index;
+  int direction_count;
+  int departure_index;
+  int stop_count;
+  bool live[3];
+  bool favorite;
   bool loading;
-} FlightData;
+  bool detail_active;
+} TransitData;
 
 static Window *s_window;
 static Layer *s_canvas;
 static AppTimer *s_refresh_timer;
-static AppTimer *s_loading_timer;
-static FlightData s_flight;
-static int s_page;
-static int s_loading_frame;
+static AppTimer *s_animation_timer;
+static TransitData s_transit;
+static int s_detail_page;
+static int s_signal_frame;
+static int s_slide_offset;
 
-#define REFRESH_INTERVAL_MS (5 * 60 * 1000)
-
-static GColor status_color_for_level(int level) {
-  switch (level) {
-    case 0: return GColorIslamicGreen;
-    case 1: return GColorChromeYellow;
-    case 2: return GColorOrange;
-    case 3: return GColorRed;
-    default: return GColorDarkCandyAppleRed;
-  }
+static GColor color_from_hex(uint32_t rgb) {
+#ifdef PBL_COLOR
+  return (GColor){.argb = (uint8_t)(0xC0 | ((rgb >> 18) & 0x30) |
+      ((rgb >> 12) & 0x0C) | ((rgb >> 6) & 0x03))};
+#else
+  return GColorBlack;
+#endif
 }
 
-static GColor status_color(void) { return status_color_for_level(s_flight.status_level); }
-
-static void copy_tuple(DictionaryIterator *iter, uint32_t key, char *dest, size_t size) {
-  Tuple *tuple = dict_find(iter, key);
-  if (tuple && tuple->type == TUPLE_CSTRING) {
-    snprintf(dest, size, "%s", tuple->value->cstring);
-  }
-}
+static GColor route_color(void) { return color_from_hex(s_transit.route_color); }
+static GColor route_text_color(void) { return color_from_hex(s_transit.text_color); }
 
 static void draw_text(GContext *ctx, const char *text, GRect rect, GFont font,
                       GColor color, GTextAlignment alignment) {
   graphics_context_set_text_color(ctx, color);
   graphics_draw_text(ctx, text, font, rect, GTextOverflowModeTrailingEllipsis,
                      alignment, NULL);
-}
-
-static void draw_page_dots(GContext *ctx, GRect bounds) {
-  for (int i = 0; i < 5; i++) {
-    graphics_context_set_fill_color(ctx, i == s_page ? GColorBlue : GColorLightGray);
-    graphics_fill_circle(ctx, GPoint(bounds.size.w - 4, 91 + i * 11), i == s_page ? 3 : 2);
-  }
 }
 
 static void format_watch_time(char *buffer, size_t size) {
@@ -83,431 +67,478 @@ static void format_watch_time(char *buffer, size_t size) {
   }
 }
 
-static void draw_plane(GContext *ctx, GPoint center) {
-  graphics_context_set_fill_color(ctx, GColorWhite);
-  graphics_fill_rect(ctx, GRect(center.x - 6, center.y - 1, 12, 3), 0, GCornerNone);
-  graphics_fill_rect(ctx, GRect(center.x - 1, center.y - 5, 3, 11), 0, GCornerNone);
-  graphics_fill_rect(ctx, GRect(center.x - 5, center.y - 3, 2, 7), 0, GCornerNone);
-}
-
-static void draw_flight_header(GContext *ctx, GRect bounds) {
-  graphics_context_set_fill_color(ctx, GColorCobaltBlue);
-  graphics_fill_rect(ctx, GRect(0, 0, bounds.size.w, 96), 0, GCornerNone);
-  char clock_text[8];
-  format_watch_time(clock_text, sizeof(clock_text));
-  draw_text(ctx, clock_text, GRect(0, 1, bounds.size.w, 18),
-            fonts_get_system_font(FONT_KEY_GOTHIC_14), GColorWhite,
-            GTextAlignmentCenter);
-
-  int route_x[] = {52, 64, 77, 90, 103, 116, 129, 142, 148};
-  int route_y[] = {37, 31, 27, 24, 24, 26, 30, 35, 37};
-  graphics_context_set_fill_color(ctx, GColorWhite);
-  for (int i = 0; i < 9; i++) {
-    graphics_fill_circle(ctx, GPoint(route_x[i], route_y[i]), (i == 0 || i == 8) ? 4 : 1);
-  }
-  draw_plane(ctx, GPoint(s_flight.loading ? 72 + s_loading_frame * 5 : 100, 25));
-  draw_text(ctx, s_flight.flight, GRect(0, 40, bounds.size.w, 18),
-            fonts_get_system_font(FONT_KEY_GOTHIC_14_BOLD), GColorWhite,
-            GTextAlignmentCenter);
-  char route[24];
-  snprintf(route, sizeof(route), "%s  >  %s", s_flight.origin, s_flight.destination);
-  draw_text(ctx, route, GRect(8, 55, bounds.size.w - 16, 28),
-            fonts_get_system_font(FONT_KEY_GOTHIC_24_BOLD), GColorWhite,
-            GTextAlignmentCenter);
-  draw_text(ctx, s_flight.date, GRect(0, 79, bounds.size.w, 17),
-            fonts_get_system_font(FONT_KEY_GOTHIC_14), GColorWhite,
-            GTextAlignmentCenter);
-}
-
-static void draw_separator(GContext *ctx, int y, int width) {
-  graphics_context_set_stroke_color(ctx, GColorLightGray);
-  graphics_context_set_stroke_width(ctx, 1);
-  graphics_draw_line(ctx, GPoint(5, y), GPoint(width - 8, y));
-}
-
-static void draw_refresh_footer(GContext *ctx, GRect bounds) {
-  draw_separator(ctx, 197, bounds.size.w);
-  if (s_flight.error[0]) {
-    draw_text(ctx, s_flight.error, GRect(7, 199, bounds.size.w - 14, 29),
-              fonts_get_system_font(FONT_KEY_GOTHIC_14), GColorRed,
-              GTextAlignmentCenter);
+static void format_eta(int32_t epoch, char *buffer, size_t size) {
+  if (epoch <= 0) {
+    snprintf(buffer, size, "--");
     return;
   }
-  char updated[32];
-  snprintf(updated, sizeof(updated), s_flight.loading ? "Updating flight..." : "Updated %s", s_flight.updated);
-  char next[40];
-  snprintf(next, sizeof(next), "Next auto %s", s_flight.next_refresh);
-  draw_text(ctx, updated, GRect(7, 198, bounds.size.w - 14, 16),
-            fonts_get_system_font(FONT_KEY_GOTHIC_14), GColorDarkGray,
-            GTextAlignmentCenter);
-  draw_text(ctx, next, GRect(7, 212, bounds.size.w - 14, 16),
-            fonts_get_system_font(FONT_KEY_GOTHIC_14_BOLD), GColorBlue,
-            GTextAlignmentCenter);
+  int32_t seconds = epoch - (int32_t)time(NULL);
+  if (seconds <= 30) {
+    snprintf(buffer, size, "NOW");
+    return;
+  }
+  int minutes = (seconds + 59) / 60;
+  if (minutes < 60) {
+    snprintf(buffer, size, "%d min", minutes);
+    return;
+  }
+  time_t value = (time_t)epoch;
+  struct tm *local = localtime(&value);
+  strftime(buffer, size, clock_is_24h_style() ? "%H:%M" : "%I:%M", local);
+  if (!clock_is_24h_style() && buffer[0] == '0') {
+    memmove(buffer, buffer + 1, strlen(buffer));
+  }
 }
 
-static void draw_aircraft_image(GContext *ctx, GPoint center, GColor color) {
+static void draw_live_signal(GContext *ctx, GPoint center, GColor color, int frame) {
   graphics_context_set_fill_color(ctx, color);
-  graphics_fill_rect(ctx, GRect(center.x - 2, center.y - 15, 5, 30), 0, GCornerNone);
-  graphics_fill_circle(ctx, GPoint(center.x, center.y - 14), 3);
-  graphics_fill_rect(ctx, GRect(center.x - 18, center.y - 2, 37, 5), 0, GCornerNone);
-  graphics_fill_rect(ctx, GRect(center.x - 12, center.y - 6, 25, 5), 0, GCornerNone);
-  graphics_fill_rect(ctx, GRect(center.x - 8, center.y + 10, 17, 4), 0, GCornerNone);
-}
-
-static void draw_timeline_row(GContext *ctx, int y, const char *route,
-                              const char *status, int level, bool current) {
-  graphics_context_set_fill_color(ctx, status_color_for_level(level));
-  graphics_fill_circle(ctx, GPoint(17, y + 8), current ? 5 : 4);
-  draw_text(ctx, route, GRect(29, y, 83, 18),
-            fonts_get_system_font(current ? FONT_KEY_GOTHIC_14_BOLD : FONT_KEY_GOTHIC_14),
-            GColorBlack, GTextAlignmentLeft);
-  draw_text(ctx, status, GRect(111, y, 77, 18),
-            fonts_get_system_font(FONT_KEY_GOTHIC_14),
-            status_color_for_level(level), GTextAlignmentRight);
-}
-
-static void draw_aircraft_page(GContext *ctx, GRect bounds) {
-  graphics_context_set_fill_color(ctx, GColorCobaltBlue);
-  graphics_fill_rect(ctx, GRect(0, 0, bounds.size.w, 70), 0, GCornerNone);
-  draw_text(ctx, "AIRCRAFT", GRect(8, 5, 92, 22),
-            fonts_get_system_font(FONT_KEY_GOTHIC_18_BOLD), GColorWhite,
-            GTextAlignmentLeft);
-  draw_aircraft_image(ctx, GPoint(151, 35), GColorWhite);
-
-  draw_text(ctx, "MODEL", GRect(7, 75, 55, 18),
-            fonts_get_system_font(FONT_KEY_GOTHIC_14_BOLD), GColorDarkGray,
-            GTextAlignmentLeft);
-  draw_text(ctx, s_flight.aircraft_model, GRect(62, 73, 126, 22),
-            fonts_get_system_font(FONT_KEY_GOTHIC_14_BOLD), GColorBlack,
-            GTextAlignmentRight);
-  draw_separator(ctx, 96, bounds.size.w);
-  draw_text(ctx, "NUMBER", GRect(7, 99, 62, 18),
-            fonts_get_system_font(FONT_KEY_GOTHIC_14_BOLD), GColorDarkGray,
-            GTextAlignmentLeft);
-  draw_text(ctx, s_flight.aircraft_number, GRect(69, 97, 119, 22),
-            fonts_get_system_font(FONT_KEY_GOTHIC_18_BOLD), GColorBlue,
-            GTextAlignmentRight);
-  draw_separator(ctx, 121, bounds.size.w);
-  draw_text(ctx, "FIRST FLIGHT", GRect(7, 124, 90, 18),
-            fonts_get_system_font(FONT_KEY_GOTHIC_14_BOLD), GColorDarkGray,
-            GTextAlignmentLeft);
-  draw_text(ctx, s_flight.aircraft_first_flight, GRect(97, 122, 91, 22),
-            fonts_get_system_font(FONT_KEY_GOTHIC_14), GColorBlack,
-            GTextAlignmentRight);
-
-  draw_text(ctx, "INCOMING LEGS", GRect(7, 146, 130, 18),
-            fonts_get_system_font(FONT_KEY_GOTHIC_14_BOLD), GColorBlack,
-            GTextAlignmentLeft);
-  graphics_context_set_stroke_color(ctx, GColorLightGray);
+  graphics_fill_circle(ctx, GPoint(center.x - 5, center.y + 5), 2);
+  graphics_context_set_stroke_color(ctx, color);
   graphics_context_set_stroke_width(ctx, 2);
-  graphics_draw_line(ctx, GPoint(17, 165), GPoint(17, 219));
-  draw_timeline_row(ctx, 162, s_flight.aircraft_leg_2,
-                    s_flight.aircraft_leg_2_status, s_flight.aircraft_leg_2_level, false);
-  draw_timeline_row(ctx, 184, s_flight.aircraft_leg_1,
-                    s_flight.aircraft_leg_1_status, s_flight.aircraft_leg_1_level, false);
-  char current_route[24];
-  snprintf(current_route, sizeof(current_route), "%s > %s", s_flight.origin, s_flight.destination);
-  draw_timeline_row(ctx, 206, current_route, s_flight.status, s_flight.status_level, true);
-  draw_page_dots(ctx, bounds);
-}
-
-static void draw_ticket_icon(GContext *ctx, GRect rect) {
-  graphics_context_set_stroke_color(ctx, GColorBlack);
-  graphics_context_set_stroke_width(ctx, 2);
-  graphics_draw_round_rect(ctx, rect, 4);
-  int divider = rect.origin.x + 43;
-  for (int y = rect.origin.y + 4; y < rect.origin.y + rect.size.h - 3; y += 5) {
-    graphics_draw_line(ctx, GPoint(divider, y), GPoint(divider, y + 2));
+  int visible = 1 + (frame % 3);
+  if (visible >= 1) {
+    graphics_draw_arc(ctx, GRect(center.x - 10, center.y, 11, 11),
+                      GOvalScaleModeFitCircle, DEG_TO_TRIGANGLE(270), DEG_TO_TRIGANGLE(360));
   }
-  graphics_context_set_fill_color(ctx, GColorWhite);
-  graphics_fill_circle(ctx, GPoint(rect.origin.x, rect.origin.y + rect.size.h / 2), 3);
-  graphics_fill_circle(ctx, GPoint(rect.origin.x + rect.size.w, rect.origin.y + rect.size.h / 2), 3);
+  if (visible >= 2) {
+    graphics_draw_arc(ctx, GRect(center.x - 13, center.y - 3, 17, 17),
+                      GOvalScaleModeFitCircle, DEG_TO_TRIGANGLE(270), DEG_TO_TRIGANGLE(360));
+  }
+  if (visible >= 3) {
+    graphics_draw_arc(ctx, GRect(center.x - 16, center.y - 6, 23, 23),
+                      GOvalScaleModeFitCircle, DEG_TO_TRIGANGLE(270), DEG_TO_TRIGANGLE(360));
+  }
+}
 
-  GPoint plane = GPoint(rect.origin.x + 22, rect.origin.y + 20);
-  graphics_context_set_fill_color(ctx, GColorBlue);
-  graphics_fill_rect(ctx, GRect(plane.x - 12, plane.y - 1, 24, 3), 0, GCornerNone);
-  graphics_fill_rect(ctx, GRect(plane.x - 1, plane.y - 8, 3, 17), 0, GCornerNone);
-  graphics_fill_rect(ctx, GRect(plane.x - 7, plane.y - 5, 3, 11), 0, GCornerNone);
+static void draw_spinner(GContext *ctx, GPoint center) {
+  static const int8_t x[] = {0, 5, 7, 5, 0, -5, -7, -5};
+  static const int8_t y[] = {-7, -5, 0, 5, 7, 5, 0, -5};
+  for (int i = 0; i < 8; i++) {
+    int age = (i - s_signal_frame + 16) % 8;
+    graphics_context_set_fill_color(ctx, age < 2 ? GColorWhite : GColorDarkGray);
+    graphics_fill_circle(ctx, GPoint(center.x + x[i], center.y + y[i]), age < 2 ? 2 : 1);
+  }
+}
 
-  graphics_context_set_stroke_color(ctx, GColorBlack);
-  graphics_draw_rect(ctx, GRect(rect.origin.x + 49, rect.origin.y + 6, 11, 11));
+static void draw_vehicle_icon(GContext *ctx, GPoint p, int mode, GColor color) {
+  graphics_context_set_stroke_color(ctx, color);
+  graphics_context_set_fill_color(ctx, color);
+  graphics_context_set_stroke_width(ctx, 2);
+
+  if (mode == 4) {
+    graphics_draw_line(ctx, GPoint(p.x - 12, p.y + 5), GPoint(p.x + 12, p.y + 5));
+    graphics_draw_line(ctx, GPoint(p.x - 12, p.y + 5), GPoint(p.x - 6, p.y + 11));
+    graphics_draw_line(ctx, GPoint(p.x - 6, p.y + 11), GPoint(p.x + 8, p.y + 11));
+    graphics_draw_line(ctx, GPoint(p.x + 8, p.y + 11), GPoint(p.x + 12, p.y + 5));
+    graphics_draw_rect(ctx, GRect(p.x - 6, p.y - 3, 13, 9));
+    graphics_draw_line(ctx, GPoint(p.x, p.y - 3), GPoint(p.x, p.y - 9));
+    return;
+  }
+  if (mode == 5 || mode == 6 || mode == 7) {
+    graphics_draw_line(ctx, GPoint(p.x - 14, p.y - 10), GPoint(p.x + 14, p.y - 10));
+    graphics_draw_line(ctx, GPoint(p.x, p.y - 10), GPoint(p.x, p.y - 3));
+    graphics_draw_round_rect(ctx, GRect(p.x - 10, p.y - 3, 21, 18), 4);
+    graphics_draw_line(ctx, GPoint(p.x - 4, p.y + 1), GPoint(p.x - 4, p.y + 8));
+    graphics_draw_line(ctx, GPoint(p.x + 4, p.y + 1), GPoint(p.x + 4, p.y + 8));
+    return;
+  }
+  if (mode == 1) {
+    graphics_draw_circle(ctx, p, 13);
+    draw_text(ctx, "M", GRect(p.x - 12, p.y - 11, 24, 22),
+              fonts_get_system_font(FONT_KEY_GOTHIC_18_BOLD), color, GTextAlignmentCenter);
+    return;
+  }
+
+  graphics_draw_round_rect(ctx, GRect(p.x - 10, p.y - 13, 21, 25), mode == 3 ? 4 : 8);
+  graphics_draw_line(ctx, GPoint(p.x - 6, p.y - 7), GPoint(p.x + 7, p.y - 7));
+  graphics_draw_line(ctx, GPoint(p.x - 6, p.y - 2), GPoint(p.x + 7, p.y - 2));
+  graphics_fill_circle(ctx, GPoint(p.x - 6, p.y + 13), 2);
+  graphics_fill_circle(ctx, GPoint(p.x + 7, p.y + 13), 2);
+  if (mode == 0) {
+    graphics_draw_line(ctx, GPoint(p.x - 5, p.y - 13), GPoint(p.x, p.y - 18));
+    graphics_draw_line(ctx, GPoint(p.x, p.y - 18), GPoint(p.x + 5, p.y - 13));
+  }
+}
+
+static void draw_top_bar(GContext *ctx, GRect bounds) {
   graphics_context_set_fill_color(ctx, GColorBlack);
-  graphics_fill_rect(ctx, GRect(rect.origin.x + 52, rect.origin.y + 9, 5, 5), 0, GCornerNone);
-  graphics_fill_rect(ctx, GRect(rect.origin.x + 49, rect.origin.y + 23, 13, 2), 0, GCornerNone);
-  graphics_fill_rect(ctx, GRect(rect.origin.x + 49, rect.origin.y + 28, 13, 2), 0, GCornerNone);
-  graphics_fill_rect(ctx, GRect(rect.origin.x + 49, rect.origin.y + 33, 13, 2), 0, GCornerNone);
+  graphics_fill_rect(ctx, GRect(0, 0, bounds.size.w, 27), 0, GCornerNone);
+  char clock_text[8];
+  format_watch_time(clock_text, sizeof(clock_text));
+  draw_text(ctx, clock_text, GRect(0, 4, bounds.size.w, 18),
+            fonts_get_system_font(FONT_KEY_GOTHIC_14_BOLD), GColorWhite,
+            GTextAlignmentCenter);
+  if (s_transit.favorite) {
+    draw_text(ctx, "PIN", GRect(7, 5, 35, 17),
+              fonts_get_system_font(FONT_KEY_GOTHIC_14_BOLD), GColorMintGreen,
+              GTextAlignmentLeft);
+  } else {
+    draw_vehicle_icon(ctx, GPoint(17, 13), s_transit.mode_code, GColorWhite);
+  }
+  char position[24];
+  snprintf(position, sizeof(position), "%d/%d", s_transit.line_index + 1,
+           s_transit.line_count > 0 ? s_transit.line_count : 1);
+  draw_text(ctx, position, GRect(bounds.size.w - 44, 5, 37, 17),
+            fonts_get_system_font(FONT_KEY_GOTHIC_14), GColorLightGray,
+            GTextAlignmentRight);
+  if (s_transit.loading) { draw_spinner(ctx, GPoint(bounds.size.w - 10, 13)); }
 }
 
-static void draw_seat(GContext *ctx, int x, bool selected) {
-  GColor fill = selected ? GColorOxfordBlue : GColorLightGray;
-  graphics_context_set_fill_color(ctx, fill);
-  graphics_fill_rect(ctx, GRect(x, 132, 22, 29), 5, GCornersTop);
-  graphics_fill_rect(ctx, GRect(x, 162, 22, 14), 2, GCornersBottom);
-  graphics_fill_rect(ctx, GRect(x - 3, 157, 4, 17), 1, GCornersAll);
-  graphics_fill_rect(ctx, GRect(x + 21, 157, 4, 17), 1, GCornersAll);
-  graphics_fill_rect(ctx, GRect(x + 3, 175, 4, 7), 0, GCornerNone);
-  graphics_fill_rect(ctx, GRect(x + 16, 175, 4, 7), 0, GCornerNone);
-  graphics_context_set_stroke_color(ctx, selected ? GColorBlack : GColorDarkGray);
-  graphics_context_set_stroke_width(ctx, 1);
-  graphics_draw_round_rect(ctx, GRect(x, 132, 22, 44), 5);
-  graphics_draw_line(ctx, GPoint(x + 4, 158), GPoint(x + 18, 158));
-}
-
-static void draw_seat_map(GContext *ctx) {
-  graphics_context_set_stroke_color(ctx, GColorBlack);
-  graphics_context_set_stroke_width(ctx, 2);
-  graphics_draw_round_rect(ctx, GRect(7, 136, 24, 40), 11);
-  graphics_context_set_stroke_color(ctx, GColorBlue);
-  graphics_draw_round_rect(ctx, GRect(11, 140, 16, 32), 8);
-  graphics_context_set_stroke_width(ctx, 1);
-  graphics_draw_line(ctx, GPoint(13, 164), GPoint(24, 147));
-  graphics_draw_line(ctx, GPoint(16, 169), GPoint(26, 154));
-
-  const char *labels[] = {"WINDOW", "MIDDLE", "AISLE"};
-  const int xs[] = {39, 68, 97};
-  for (int i = 0; i < 3; i++) {
-    bool selected = strcmp(s_flight.seat_position, labels[i]) == 0;
-    draw_seat(ctx, xs[i], selected);
+static void draw_direction_dots(GContext *ctx, int y, GColor color) {
+  if (s_transit.direction_count < 2) { return; }
+  int start = 94 - ((s_transit.direction_count - 1) * 8);
+  for (int i = 0; i < s_transit.direction_count; i++) {
+    graphics_context_set_fill_color(ctx, color);
+    graphics_fill_circle(ctx, GPoint(start + i * 16, y),
+                         i == s_transit.direction_index ? 3 : 1);
   }
 }
 
-static void draw_booking_page(GContext *ctx, GRect bounds) {
-  graphics_context_set_fill_color(ctx, GColorCobaltBlue);
-  graphics_fill_rect(ctx, GRect(0, 0, bounds.size.w, 54), 0, GCornerNone);
-  draw_text(ctx, "BOOKING", GRect(8, 7, bounds.size.w - 16, 24),
-            fonts_get_system_font(FONT_KEY_GOTHIC_18_BOLD), GColorWhite,
-            GTextAlignmentCenter);
-  draw_text(ctx, s_flight.flight, GRect(8, 28, bounds.size.w - 16, 20),
+static void draw_error(GContext *ctx, GRect bounds) {
+  if (!s_transit.error[0]) { return; }
+  graphics_context_set_fill_color(ctx, GColorBulgarianRose);
+  graphics_fill_rect(ctx, GRect(0, bounds.size.h - 31, bounds.size.w, 31), 0, GCornerNone);
+  draw_text(ctx, s_transit.error, GRect(6, bounds.size.h - 30, bounds.size.w - 12, 28),
             fonts_get_system_font(FONT_KEY_GOTHIC_14), GColorWhite,
             GTextAlignmentCenter);
+}
 
-  draw_ticket_icon(ctx, GRect(8, 66, 68, 40));
-  draw_text(ctx, "BOOKING CODE", GRect(84, 63, 104, 18),
-            fonts_get_system_font(FONT_KEY_GOTHIC_14_BOLD), GColorDarkGray,
-            GTextAlignmentLeft);
-  draw_text(ctx, s_flight.booking_code, GRect(84, 80, 104, 28),
-            fonts_get_system_font(FONT_KEY_GOTHIC_18_BOLD), GColorBlue,
-            GTextAlignmentLeft);
-  draw_separator(ctx, 116, bounds.size.w);
+static void draw_home(GContext *ctx, GRect bounds) {
+  graphics_context_set_fill_color(ctx, GColorWhite);
+  graphics_fill_rect(ctx, bounds, 0, GCornerNone);
+  draw_top_bar(ctx, bounds);
 
-  draw_seat_map(ctx);
-  draw_text(ctx, "SEAT", GRect(132, 127, 56, 18),
-            fonts_get_system_font(FONT_KEY_GOTHIC_14_BOLD), GColorDarkGray,
+  GRect card = GRect(7 + s_slide_offset, 34, bounds.size.w - 14, 165);
+  GColor accent = route_color();
+  GColor ink = route_text_color();
+  graphics_context_set_fill_color(ctx, accent);
+  graphics_fill_rect(ctx, card, 11, GCornersAll);
+
+  graphics_context_set_fill_color(ctx, ink);
+  graphics_fill_circle(ctx, GPoint(card.origin.x + 35, 67), 25);
+  draw_text(ctx, s_transit.route_name,
+            GRect(card.origin.x + 11, 49, 48, 35),
+            fonts_get_system_font(strlen(s_transit.route_name) > 4 ?
+              FONT_KEY_GOTHIC_18_BOLD : FONT_KEY_BITHAM_30_BLACK),
+            accent, GTextAlignmentCenter);
+
+  draw_text(ctx, s_transit.mode_name, GRect(card.origin.x + 69, 43, 97, 20),
+            fonts_get_system_font(FONT_KEY_GOTHIC_14_BOLD), ink,
             GTextAlignmentLeft);
-  draw_text(ctx, s_flight.seat_number, GRect(130, 143, 58, 34),
-            fonts_get_system_font(FONT_KEY_BITHAM_30_BLACK), GColorBlue,
+  draw_text(ctx, s_transit.route_long_name, GRect(card.origin.x + 69, 61, 101, 35),
+            fonts_get_system_font(FONT_KEY_GOTHIC_18_BOLD), ink,
             GTextAlignmentLeft);
-  draw_text(ctx, s_flight.seat_position, GRect(128, 177, 60, 20),
-            fonts_get_system_font(FONT_KEY_GOTHIC_14_BOLD), GColorBlack,
+
+  draw_text(ctx, "TO", GRect(card.origin.x + 12, 94, 22, 18),
+            fonts_get_system_font(FONT_KEY_GOTHIC_14_BOLD), ink,
             GTextAlignmentLeft);
-  draw_text(ctx, "Private • stored on phone", GRect(8, 208, bounds.size.w - 16, 18),
+  draw_text(ctx, s_transit.headsign, GRect(card.origin.x + 34, 92, card.size.w - 45, 22),
+            fonts_get_system_font(FONT_KEY_GOTHIC_18_BOLD), ink,
+            GTextAlignmentLeft);
+  draw_direction_dots(ctx, 117, ink);
+
+  graphics_context_set_stroke_color(ctx, ink);
+  graphics_context_set_stroke_width(ctx, 1);
+  graphics_draw_line(ctx, GPoint(card.origin.x + 12, 125),
+                     GPoint(card.origin.x + card.size.w - 12, 125));
+  draw_text(ctx, s_transit.stop_name, GRect(card.origin.x + 12, 129, card.size.w - 24, 20),
+            fonts_get_system_font(FONT_KEY_GOTHIC_14), ink,
+            GTextAlignmentLeft);
+
+  char eta[16];
+  format_eta(s_transit.departures[0], eta, sizeof(eta));
+  draw_text(ctx, eta, GRect(card.origin.x + 11, 148, 133, 45),
+            fonts_get_system_font(FONT_KEY_BITHAM_42_BOLD), ink,
+            GTextAlignmentLeft);
+  if (s_transit.live[0]) {
+    draw_live_signal(ctx, GPoint(card.origin.x + card.size.w - 25, 168), ink, s_signal_frame);
+  } else {
+    draw_text(ctx, "SCHED", GRect(card.origin.x + card.size.w - 55, 164, 45, 18),
+              fonts_get_system_font(FONT_KEY_GOTHIC_14_BOLD), ink,
+              GTextAlignmentRight);
+  }
+
+  char footer[56];
+  snprintf(footer, sizeof(footer), "Select direction  •  updated %s", s_transit.updated);
+  draw_text(ctx, footer, GRect(6, 203, bounds.size.w - 12, 20),
             fonts_get_system_font(FONT_KEY_GOTHIC_14), GColorDarkGray,
             GTextAlignmentCenter);
-  draw_page_dots(ctx, bounds);
+  draw_error(ctx, bounds);
+}
+
+static void draw_detail_header(GContext *ctx, GRect bounds, const char *label) {
+  GColor accent = route_color();
+  GColor ink = route_text_color();
+  graphics_context_set_fill_color(ctx, accent);
+  graphics_fill_rect(ctx, GRect(0, 0, bounds.size.w, 53), 0, GCornerNone);
+  draw_text(ctx, s_transit.route_name, GRect(8, 5, 65, 34),
+            fonts_get_system_font(FONT_KEY_BITHAM_30_BLACK), ink,
+            GTextAlignmentLeft);
+  draw_text(ctx, label, GRect(73, 5, 117, 18),
+            fonts_get_system_font(FONT_KEY_GOTHIC_14_BOLD), ink,
+            GTextAlignmentRight);
+  draw_text(ctx, s_transit.headsign, GRect(72, 22, 118, 26),
+            fonts_get_system_font(FONT_KEY_GOTHIC_18_BOLD), ink,
+            GTextAlignmentRight);
+}
+
+static void draw_page_rail(GContext *ctx, int active) {
+  for (int i = 0; i < 2; i++) {
+    graphics_context_set_fill_color(ctx, i == active ? route_color() : GColorLightGray);
+    graphics_fill_circle(ctx, GPoint(196, 106 + i * 17), i == active ? 3 : 2);
+  }
+}
+
+static void draw_departures_page(GContext *ctx, GRect bounds) {
+  graphics_context_set_fill_color(ctx, GColorWhite);
+  graphics_fill_rect(ctx, bounds, 0, GCornerNone);
+  draw_detail_header(ctx, bounds, "NEXT 3");
+  draw_text(ctx, s_transit.stop_name, GRect(8, 56, bounds.size.w - 16, 20),
+            fonts_get_system_font(FONT_KEY_GOTHIC_14), GColorDarkGray,
+            GTextAlignmentCenter);
+
+  for (int i = 0; i < 3; i++) {
+    int y = 79 + i * 40;
+    bool selected = i == s_transit.departure_index;
+    GColor fill = selected ? route_color() : GColorLightGray;
+    GColor ink = selected ? route_text_color() : GColorBlack;
+    graphics_context_set_fill_color(ctx, fill);
+    graphics_fill_rect(ctx, GRect(10, y, 178, 34), 8, GCornersAll);
+    char ordinal[4];
+    snprintf(ordinal, sizeof(ordinal), "%d", i + 1);
+    draw_text(ctx, ordinal, GRect(18, y + 6, 20, 20),
+              fonts_get_system_font(FONT_KEY_GOTHIC_14_BOLD), ink,
+              GTextAlignmentCenter);
+    char eta[16];
+    format_eta(s_transit.departures[i], eta, sizeof(eta));
+    draw_text(ctx, eta, GRect(45, y + 1, 96, 30),
+              fonts_get_system_font(FONT_KEY_GOTHIC_24_BOLD), ink,
+              GTextAlignmentLeft);
+    if (s_transit.live[i]) {
+      draw_live_signal(ctx, GPoint(170, y + 11), ink, s_signal_frame + i);
+    } else {
+      draw_text(ctx, "S", GRect(157, y + 7, 20, 18),
+                fonts_get_system_font(FONT_KEY_GOTHIC_14_BOLD), ink,
+                GTextAlignmentCenter);
+    }
+  }
+  draw_text(ctx, "SELECT next  •  UP/DOWN stops", GRect(7, 204, 184, 19),
+            fonts_get_system_font(FONT_KEY_GOTHIC_14), GColorDarkGray,
+            GTextAlignmentCenter);
+  draw_page_rail(ctx, 0);
+  draw_error(ctx, bounds);
+}
+
+static void draw_stops_page(GContext *ctx, GRect bounds) {
+  graphics_context_set_fill_color(ctx, GColorWhite);
+  graphics_fill_rect(ctx, bounds, 0, GCornerNone);
+  char header[40];
+  char eta[16];
+  format_eta(s_transit.departures[s_transit.departure_index], eta, sizeof(eta));
+  snprintf(header, sizeof(header), "TRIP %d • %s", s_transit.departure_index + 1, eta);
+  draw_detail_header(ctx, bounds, header);
+
+  if (s_transit.stop_count == 0) {
+    if (s_transit.loading) {
+      draw_spinner(ctx, GPoint(100, 112));
+      draw_text(ctx, "Loading trip stops…", GRect(15, 128, 170, 24),
+                fonts_get_system_font(FONT_KEY_GOTHIC_18_BOLD), GColorDarkGray,
+                GTextAlignmentCenter);
+    } else {
+      draw_text(ctx, "Stop times unavailable", GRect(15, 100, 170, 28),
+                fonts_get_system_font(FONT_KEY_GOTHIC_18_BOLD), GColorDarkGray,
+                GTextAlignmentCenter);
+    }
+  } else {
+    graphics_context_set_stroke_color(ctx, route_color());
+    graphics_context_set_stroke_width(ctx, 2);
+    graphics_draw_line(ctx, GPoint(18, 67), GPoint(18, 204));
+    for (int i = 0; i < s_transit.stop_count && i < STOP_LIMIT; i++) {
+      int y = 59 + i * 30;
+      graphics_context_set_fill_color(ctx, i == 0 ? route_color() : GColorWhite);
+      graphics_fill_circle(ctx, GPoint(18, y + 10), i == 0 ? 5 : 4);
+      graphics_context_set_stroke_color(ctx, route_color());
+      graphics_draw_circle(ctx, GPoint(18, y + 10), 4);
+      draw_text(ctx, s_transit.stop_names[i], GRect(30, y, 113, 25),
+                fonts_get_system_font(i == 0 ? FONT_KEY_GOTHIC_14_BOLD : FONT_KEY_GOTHIC_14),
+                GColorBlack, GTextAlignmentLeft);
+      char stop_eta[14];
+      format_eta(s_transit.stop_times[i], stop_eta, sizeof(stop_eta));
+      draw_text(ctx, stop_eta, GRect(144, y + 2, 44, 20),
+                fonts_get_system_font(FONT_KEY_GOTHIC_14_BOLD), route_color(),
+                GTextAlignmentRight);
+    }
+  }
+  draw_text(ctx, "UP/DOWN board  •  SELECT next", GRect(7, 207, 184, 17),
+            fonts_get_system_font(FONT_KEY_GOTHIC_14), GColorDarkGray,
+            GTextAlignmentCenter);
+  draw_page_rail(ctx, 1);
+  draw_error(ctx, bounds);
 }
 
 static void canvas_update(Layer *layer, GContext *ctx) {
-  GRect b = layer_get_bounds(layer);
-  graphics_context_set_fill_color(ctx, GColorWhite);
-  graphics_fill_rect(ctx, b, 0, GCornerNone);
-
-  if (s_page == 0) {
-    draw_flight_header(ctx, b);
-    draw_text(ctx, "STATUS", GRect(6, 100, 70, 20),
-              fonts_get_system_font(FONT_KEY_GOTHIC_14_BOLD), GColorBlack,
-              GTextAlignmentLeft);
-    draw_text(ctx, s_flight.status, GRect(72, 100, b.size.w - 82, 20),
-              fonts_get_system_font(FONT_KEY_GOTHIC_14_BOLD), status_color(),
-              GTextAlignmentRight);
-    draw_separator(ctx, 122, b.size.w);
-
-    draw_text(ctx, "DEPART", GRect(6, 125, 88, 18),
-              fonts_get_system_font(FONT_KEY_GOTHIC_14_BOLD), GColorBlack,
-              GTextAlignmentLeft);
-    draw_text(ctx, "ARRIVE", GRect(101, 125, 88, 18),
-              fonts_get_system_font(FONT_KEY_GOTHIC_14_BOLD), GColorBlack,
-              GTextAlignmentRight);
-    draw_text(ctx, s_flight.departure_time, GRect(6, 141, 91, 27),
-              fonts_get_system_font(FONT_KEY_GOTHIC_18_BOLD), GColorBlue,
-              GTextAlignmentLeft);
-    draw_text(ctx, s_flight.arrival_time, GRect(101, 141, 88, 27),
-              fonts_get_system_font(FONT_KEY_GOTHIC_18_BOLD), GColorBlue,
-              GTextAlignmentRight);
-    draw_separator(ctx, 169, b.size.w);
-
-    char departure_place[36];
-    char arrival_place[36];
-    snprintf(departure_place, sizeof(departure_place), "Gate %s  T%s",
-             s_flight.departure_gate, s_flight.departure_terminal);
-    snprintf(arrival_place, sizeof(arrival_place), "Gate %s  T%s",
-             s_flight.arrival_gate, s_flight.arrival_terminal);
-    draw_text(ctx, departure_place, GRect(6, 173, 92, 20),
-              fonts_get_system_font(FONT_KEY_GOTHIC_14), GColorBlack,
-              GTextAlignmentLeft);
-    draw_text(ctx, arrival_place, GRect(100, 173, 89, 20),
-              fonts_get_system_font(FONT_KEY_GOTHIC_14), GColorBlack,
-              GTextAlignmentRight);
-    draw_refresh_footer(ctx, b);
-    draw_page_dots(ctx, b);
-  } else if (s_page <= 2) {
-    bool departure = s_page == 1;
-    const char *airport = departure ? s_flight.origin : s_flight.destination;
-    const char *time = departure ? s_flight.departure_time : s_flight.arrival_time;
-    const char *terminal = departure ? s_flight.departure_terminal : s_flight.arrival_terminal;
-    const char *gate = departure ? s_flight.departure_gate : s_flight.arrival_gate;
-    graphics_context_set_fill_color(ctx, GColorCobaltBlue);
-    graphics_fill_rect(ctx, GRect(0, 0, b.size.w, 70), 0, GCornerNone);
-    char clock_text[8];
-    format_watch_time(clock_text, sizeof(clock_text));
-    draw_text(ctx, clock_text, GRect(0, 1, b.size.w, 18),
-              fonts_get_system_font(FONT_KEY_GOTHIC_14), GColorWhite,
-              GTextAlignmentCenter);
-    draw_text(ctx, departure ? "DEPARTURE" : "ARRIVAL", GRect(8, 20, b.size.w - 16, 20),
-              fonts_get_system_font(FONT_KEY_GOTHIC_14_BOLD), GColorWhite,
-              GTextAlignmentCenter);
-    draw_text(ctx, airport, GRect(8, 36, b.size.w - 16, 34),
-              fonts_get_system_font(FONT_KEY_BITHAM_30_BLACK), GColorWhite,
-              GTextAlignmentCenter);
-    draw_text(ctx, time, GRect(8, 76, b.size.w - 16, 38),
-              fonts_get_system_font(FONT_KEY_BITHAM_30_BLACK), GColorBlue,
-              GTextAlignmentCenter);
-    draw_text(ctx, s_flight.date, GRect(8, 108, b.size.w - 16, 18),
-              fonts_get_system_font(FONT_KEY_GOTHIC_14), GColorDarkGray,
-              GTextAlignmentCenter);
-    draw_separator(ctx, 130, b.size.w);
-    draw_text(ctx, "GATE", GRect(8, 134, 80, 22),
-              fonts_get_system_font(FONT_KEY_GOTHIC_14_BOLD), GColorBlack,
-              GTextAlignmentLeft);
-    draw_text(ctx, gate, GRect(100, 134, 88, 22),
-              fonts_get_system_font(FONT_KEY_GOTHIC_18_BOLD), GColorBlack,
-              GTextAlignmentRight);
-    draw_separator(ctx, 158, b.size.w);
-    draw_text(ctx, "TERMINAL", GRect(8, 162, 80, 22),
-              fonts_get_system_font(FONT_KEY_GOTHIC_14_BOLD), GColorBlack,
-              GTextAlignmentLeft);
-    draw_text(ctx, terminal, GRect(100, 162, 88, 22),
-              fonts_get_system_font(FONT_KEY_GOTHIC_18_BOLD), GColorBlack,
-              GTextAlignmentRight);
-    draw_refresh_footer(ctx, b);
-    draw_page_dots(ctx, b);
-  } else if (s_page == 3) {
-    draw_aircraft_page(ctx, b);
-  } else {
-    draw_booking_page(ctx, b);
-  }
+  GRect bounds = layer_get_bounds(layer);
+  if (!s_transit.detail_active) { draw_home(ctx, bounds); }
+  else if (s_detail_page == 0) { draw_departures_page(ctx, bounds); }
+  else { draw_stops_page(ctx, bounds); }
 }
 
-static void loading_timer_callback(void *context) {
-  if (!s_flight.loading) {
-    s_loading_timer = NULL;
-    return;
-  }
-  s_loading_frame = (s_loading_frame + 1) % 12;
-  layer_mark_dirty(s_canvas);
-  s_loading_timer = app_timer_register(140, loading_timer_callback, NULL);
+static void animation_timer_callback(void *context) {
+  s_signal_frame = (s_signal_frame + 1) % 24;
+  if (s_slide_offset > 0) { s_slide_offset -= 4; if (s_slide_offset < 0) s_slide_offset = 0; }
+  if (s_slide_offset < 0) { s_slide_offset += 4; if (s_slide_offset > 0) s_slide_offset = 0; }
+  if (s_canvas) { layer_mark_dirty(s_canvas); }
+  s_animation_timer = app_timer_register(ANIMATION_INTERVAL_MS, animation_timer_callback, NULL);
 }
 
-static void start_loading_animation(void) {
-  s_loading_frame = 0;
-  if (!s_loading_timer) {
-    s_loading_timer = app_timer_register(140, loading_timer_callback, NULL);
-  }
-}
-
-static void request_aircraft_details(void) {
+static void send_request(uint32_t key, int8_t value) {
   DictionaryIterator *out;
   if (app_message_outbox_begin(&out) == APP_MSG_OK) {
-    dict_write_uint8(out, MESSAGE_KEY_REQUEST_AIRCRAFT_DETAILS, 1);
+    dict_write_int8(out, key, value);
     app_message_outbox_send();
   }
 }
 
-static void change_page(int delta) {
-  s_page = (s_page + delta + 5) % 5;
+static void change_line(int delta) {
+  s_slide_offset = delta > 0 ? 18 : -18;
+  s_transit.loading = true;
+  s_transit.error[0] = '\0';
+  send_request(MESSAGE_KEY_REQUEST_LINE_DELTA, delta);
   layer_mark_dirty(s_canvas);
-  if (s_page == 3) { request_aircraft_details(); }
 }
 
-static void up_click(ClickRecognizerRef recognizer, void *context) { change_page(-1); }
-static void down_click(ClickRecognizerRef recognizer, void *context) { change_page(1); }
-
-static void request_refresh(bool is_manual) {
-  DictionaryIterator *out;
-  if (app_message_outbox_begin(&out) == APP_MSG_OK) {
-    dict_write_uint8(out, MESSAGE_KEY_REQUEST_REFRESH, is_manual ? 1 : 2);
-    app_message_outbox_send();
-    s_flight.loading = true;
-    s_flight.error[0] = '\0';
-    start_loading_animation();
+static void up_click(ClickRecognizerRef recognizer, void *context) {
+  if (s_transit.detail_active) {
+    s_detail_page = (s_detail_page + 1) % 2;
     layer_mark_dirty(s_canvas);
+  } else { change_line(-1); }
+}
+
+static void down_click(ClickRecognizerRef recognizer, void *context) {
+  if (s_transit.detail_active) {
+    s_detail_page = (s_detail_page + 1) % 2;
+    layer_mark_dirty(s_canvas);
+  } else { change_line(1); }
+}
+
+static void select_click(ClickRecognizerRef recognizer, void *context) {
+  s_transit.loading = true;
+  s_transit.error[0] = '\0';
+  if (s_transit.detail_active) {
+    send_request(MESSAGE_KEY_REQUEST_DEPARTURE, 1);
+  } else {
+    s_slide_offset = 10;
+    send_request(MESSAGE_KEY_REQUEST_DIRECTION, 1);
   }
+  layer_mark_dirty(s_canvas);
 }
-
-static void refresh_timer_callback(void *context) {
-  request_refresh(false);
-  s_refresh_timer = app_timer_register(REFRESH_INTERVAL_MS, refresh_timer_callback, NULL);
-}
-
-static void select_click(ClickRecognizerRef recognizer, void *context) { request_refresh(true); }
 
 static void select_long_click(ClickRecognizerRef recognizer, void *context) {
-  DictionaryIterator *out;
-  if (app_message_outbox_begin(&out) == APP_MSG_OK) {
-    dict_write_uint8(out, MESSAGE_KEY_REQUEST_NEXT_FLIGHT, 1);
-    app_message_outbox_send();
-    s_flight.loading = true;
-    s_flight.error[0] = '\0';
-    start_loading_animation();
-    vibes_short_pulse();
+  if (s_transit.detail_active) { return; }
+  s_transit.detail_active = true;
+  s_detail_page = 0;
+  s_transit.departure_index = 0;
+  s_transit.stop_count = 0;
+  s_transit.loading = true;
+  send_request(MESSAGE_KEY_REQUEST_DETAILS, 1);
+  vibes_short_pulse();
+  layer_mark_dirty(s_canvas);
+}
+
+static void up_long_click(ClickRecognizerRef recognizer, void *context) {
+  if (s_transit.detail_active) { return; }
+  s_transit.favorite = !s_transit.favorite;
+  send_request(MESSAGE_KEY_REQUEST_TOGGLE_FAVORITE, 1);
+  vibes_short_pulse();
+  layer_mark_dirty(s_canvas);
+}
+
+static void back_click(ClickRecognizerRef recognizer, void *context) {
+  if (s_transit.detail_active) {
+    s_transit.detail_active = false;
+    s_detail_page = 0;
+    send_request(MESSAGE_KEY_REQUEST_DETAILS, 2);
     layer_mark_dirty(s_canvas);
+  } else {
+    window_stack_pop(true);
   }
 }
 
 static void click_config(void *context) {
   window_single_click_subscribe(BUTTON_ID_UP, up_click);
+  window_long_click_subscribe(BUTTON_ID_UP, 650, up_long_click, NULL);
   window_single_click_subscribe(BUTTON_ID_SELECT, select_click);
-  window_long_click_subscribe(BUTTON_ID_SELECT, 700, select_long_click, NULL);
+  window_long_click_subscribe(BUTTON_ID_SELECT, 650, select_long_click, NULL);
   window_single_click_subscribe(BUTTON_ID_DOWN, down_click);
+  window_single_click_subscribe(BUTTON_ID_BACK, back_click);
+}
+
+static void refresh_timer_callback(void *context) {
+  if (!s_transit.detail_active) { send_request(MESSAGE_KEY_REQUEST_REFRESH, 2); }
+  s_refresh_timer = app_timer_register(REFRESH_INTERVAL_MS, refresh_timer_callback, NULL);
 }
 
 static void tick_handler(struct tm *tick_time, TimeUnits units_changed) {
   if (s_canvas) { layer_mark_dirty(s_canvas); }
 }
 
+static void copy_tuple(DictionaryIterator *iter, uint32_t key, char *dest, size_t size) {
+  Tuple *tuple = dict_find(iter, key);
+  if (tuple && tuple->type == TUPLE_CSTRING) {
+    snprintf(dest, size, "%s", tuple->value->cstring);
+  }
+}
+
+static int32_t tuple_int(DictionaryIterator *iter, uint32_t key, int32_t fallback) {
+  Tuple *tuple = dict_find(iter, key);
+  return tuple ? tuple->value->int32 : fallback;
+}
+
 static void inbox_received(DictionaryIterator *iter, void *context) {
-  copy_tuple(iter, MESSAGE_KEY_FLIGHT_NUMBER, s_flight.flight, sizeof(s_flight.flight));
-  copy_tuple(iter, MESSAGE_KEY_FLIGHT_DATE, s_flight.date, sizeof(s_flight.date));
-  copy_tuple(iter, MESSAGE_KEY_ORIGIN, s_flight.origin, sizeof(s_flight.origin));
-  copy_tuple(iter, MESSAGE_KEY_DESTINATION, s_flight.destination, sizeof(s_flight.destination));
-  copy_tuple(iter, MESSAGE_KEY_DEPARTURE_TIME, s_flight.departure_time, sizeof(s_flight.departure_time));
-  copy_tuple(iter, MESSAGE_KEY_ARRIVAL_TIME, s_flight.arrival_time, sizeof(s_flight.arrival_time));
-  copy_tuple(iter, MESSAGE_KEY_STATUS_LABEL, s_flight.status, sizeof(s_flight.status));
-  copy_tuple(iter, MESSAGE_KEY_DEPARTURE_GATE, s_flight.departure_gate, sizeof(s_flight.departure_gate));
-  copy_tuple(iter, MESSAGE_KEY_DEPARTURE_TERMINAL, s_flight.departure_terminal, sizeof(s_flight.departure_terminal));
-  copy_tuple(iter, MESSAGE_KEY_ARRIVAL_GATE, s_flight.arrival_gate, sizeof(s_flight.arrival_gate));
-  copy_tuple(iter, MESSAGE_KEY_ARRIVAL_TERMINAL, s_flight.arrival_terminal, sizeof(s_flight.arrival_terminal));
-  copy_tuple(iter, MESSAGE_KEY_UPDATED_AT, s_flight.updated, sizeof(s_flight.updated));
-  copy_tuple(iter, MESSAGE_KEY_NEXT_REFRESH_AT, s_flight.next_refresh, sizeof(s_flight.next_refresh));
-  copy_tuple(iter, MESSAGE_KEY_AIRCRAFT_MODEL, s_flight.aircraft_model, sizeof(s_flight.aircraft_model));
-  copy_tuple(iter, MESSAGE_KEY_AIRCRAFT_NUMBER, s_flight.aircraft_number, sizeof(s_flight.aircraft_number));
-  copy_tuple(iter, MESSAGE_KEY_AIRCRAFT_FIRST_FLIGHT, s_flight.aircraft_first_flight, sizeof(s_flight.aircraft_first_flight));
-  copy_tuple(iter, MESSAGE_KEY_AIRCRAFT_LEG_1, s_flight.aircraft_leg_1, sizeof(s_flight.aircraft_leg_1));
-  copy_tuple(iter, MESSAGE_KEY_AIRCRAFT_LEG_1_STATUS, s_flight.aircraft_leg_1_status, sizeof(s_flight.aircraft_leg_1_status));
-  copy_tuple(iter, MESSAGE_KEY_AIRCRAFT_LEG_2, s_flight.aircraft_leg_2, sizeof(s_flight.aircraft_leg_2));
-  copy_tuple(iter, MESSAGE_KEY_AIRCRAFT_LEG_2_STATUS, s_flight.aircraft_leg_2_status, sizeof(s_flight.aircraft_leg_2_status));
-  copy_tuple(iter, MESSAGE_KEY_BOOKING_CODE, s_flight.booking_code, sizeof(s_flight.booking_code));
-  copy_tuple(iter, MESSAGE_KEY_SEAT_NUMBER, s_flight.seat_number, sizeof(s_flight.seat_number));
-  copy_tuple(iter, MESSAGE_KEY_SEAT_POSITION, s_flight.seat_position, sizeof(s_flight.seat_position));
-  copy_tuple(iter, MESSAGE_KEY_ERROR_MESSAGE, s_flight.error, sizeof(s_flight.error));
-  Tuple *level = dict_find(iter, MESSAGE_KEY_STATUS_LEVEL);
-  Tuple *leg_1_level = dict_find(iter, MESSAGE_KEY_AIRCRAFT_LEG_1_LEVEL);
-  Tuple *leg_2_level = dict_find(iter, MESSAGE_KEY_AIRCRAFT_LEG_2_LEVEL);
-  Tuple *loading = dict_find(iter, MESSAGE_KEY_IS_LOADING);
-  if (level) { s_flight.status_level = (int)level->value->int32; }
-  if (leg_1_level) { s_flight.aircraft_leg_1_level = (int)leg_1_level->value->int32; }
-  if (leg_2_level) { s_flight.aircraft_leg_2_level = (int)leg_2_level->value->int32; }
-  if (loading) { s_flight.loading = loading->value->int32 != 0; }
-  if (s_flight.loading) { start_loading_animation(); }
+  copy_tuple(iter, MESSAGE_KEY_ROUTE_NAME, s_transit.route_name, sizeof(s_transit.route_name));
+  copy_tuple(iter, MESSAGE_KEY_ROUTE_LONG_NAME, s_transit.route_long_name, sizeof(s_transit.route_long_name));
+  copy_tuple(iter, MESSAGE_KEY_HEADSIGN, s_transit.headsign, sizeof(s_transit.headsign));
+  copy_tuple(iter, MESSAGE_KEY_STOP_NAME, s_transit.stop_name, sizeof(s_transit.stop_name));
+  copy_tuple(iter, MESSAGE_KEY_MODE_NAME, s_transit.mode_name, sizeof(s_transit.mode_name));
+  copy_tuple(iter, MESSAGE_KEY_UPDATED_AT, s_transit.updated, sizeof(s_transit.updated));
+  copy_tuple(iter, MESSAGE_KEY_ERROR_MESSAGE, s_transit.error, sizeof(s_transit.error));
+
+  s_transit.line_index = tuple_int(iter, MESSAGE_KEY_LINE_INDEX, s_transit.line_index);
+  s_transit.line_count = tuple_int(iter, MESSAGE_KEY_LINE_COUNT, s_transit.line_count);
+  s_transit.mode_code = tuple_int(iter, MESSAGE_KEY_MODE_CODE, s_transit.mode_code);
+  s_transit.route_color = (uint32_t)tuple_int(iter, MESSAGE_KEY_ROUTE_COLOR, s_transit.route_color);
+  s_transit.text_color = (uint32_t)tuple_int(iter, MESSAGE_KEY_ROUTE_TEXT_COLOR, s_transit.text_color);
+  s_transit.favorite = tuple_int(iter, MESSAGE_KEY_IS_FAVORITE, s_transit.favorite) != 0;
+  s_transit.departures[0] = tuple_int(iter, MESSAGE_KEY_ETA_1, s_transit.departures[0]);
+  s_transit.departures[1] = tuple_int(iter, MESSAGE_KEY_ETA_2, s_transit.departures[1]);
+  s_transit.departures[2] = tuple_int(iter, MESSAGE_KEY_ETA_3, s_transit.departures[2]);
+  s_transit.live[0] = tuple_int(iter, MESSAGE_KEY_LIVE_1, s_transit.live[0]) != 0;
+  s_transit.live[1] = tuple_int(iter, MESSAGE_KEY_LIVE_2, s_transit.live[1]) != 0;
+  s_transit.live[2] = tuple_int(iter, MESSAGE_KEY_LIVE_3, s_transit.live[2]) != 0;
+  s_transit.loading = tuple_int(iter, MESSAGE_KEY_IS_LOADING, s_transit.loading) != 0;
+  s_transit.direction_index = tuple_int(iter, MESSAGE_KEY_DIRECTION_INDEX, s_transit.direction_index);
+  s_transit.direction_count = tuple_int(iter, MESSAGE_KEY_DIRECTION_COUNT, s_transit.direction_count);
+  s_transit.detail_active = tuple_int(iter, MESSAGE_KEY_DETAIL_ACTIVE, s_transit.detail_active) != 0;
+  s_transit.departure_index = tuple_int(iter, MESSAGE_KEY_DEPARTURE_INDEX, s_transit.departure_index);
+  s_transit.stop_count = tuple_int(iter, MESSAGE_KEY_STOP_COUNT, s_transit.stop_count);
+  if (s_transit.departure_index < 0 || s_transit.departure_index > 2) {
+    s_transit.departure_index = 0;
+  }
+  if (s_transit.stop_count < 0) { s_transit.stop_count = 0; }
+  if (s_transit.stop_count > STOP_LIMIT) { s_transit.stop_count = STOP_LIMIT; }
+
+  const uint32_t name_keys[STOP_LIMIT] = {
+    MESSAGE_KEY_STOP_1_NAME, MESSAGE_KEY_STOP_2_NAME, MESSAGE_KEY_STOP_3_NAME,
+    MESSAGE_KEY_STOP_4_NAME, MESSAGE_KEY_STOP_5_NAME
+  };
+  const uint32_t time_keys[STOP_LIMIT] = {
+    MESSAGE_KEY_STOP_1_TIME, MESSAGE_KEY_STOP_2_TIME, MESSAGE_KEY_STOP_3_TIME,
+    MESSAGE_KEY_STOP_4_TIME, MESSAGE_KEY_STOP_5_TIME
+  };
+  for (int i = 0; i < STOP_LIMIT; i++) {
+    copy_tuple(iter, name_keys[i], s_transit.stop_names[i], sizeof(s_transit.stop_names[i]));
+    s_transit.stop_times[i] = tuple_int(iter, time_keys[i], s_transit.stop_times[i]);
+  }
   layer_mark_dirty(s_canvas);
 }
 
@@ -518,45 +549,43 @@ static void window_load(Window *window) {
   layer_add_child(root, s_canvas);
 }
 
-static void window_unload(Window *window) { layer_destroy(s_canvas); }
+static void window_unload(Window *window) {
+  layer_destroy(s_canvas);
+  s_canvas = NULL;
+}
 
 static void init(void) {
-  snprintf(s_flight.flight, sizeof(s_flight.flight), "PEBBLE FLIGHT");
-  snprintf(s_flight.date, sizeof(s_flight.date), "Configure on phone");
-  snprintf(s_flight.origin, sizeof(s_flight.origin), "---");
-  snprintf(s_flight.destination, sizeof(s_flight.destination), "---");
-  snprintf(s_flight.departure_time, sizeof(s_flight.departure_time), "--");
-  snprintf(s_flight.arrival_time, sizeof(s_flight.arrival_time), "--");
-  snprintf(s_flight.status, sizeof(s_flight.status), "SET UP FLIGHT");
-  snprintf(s_flight.departure_gate, sizeof(s_flight.departure_gate), "--");
-  snprintf(s_flight.departure_terminal, sizeof(s_flight.departure_terminal), "--");
-  snprintf(s_flight.arrival_gate, sizeof(s_flight.arrival_gate), "--");
-  snprintf(s_flight.arrival_terminal, sizeof(s_flight.arrival_terminal), "--");
-  snprintf(s_flight.updated, sizeof(s_flight.updated), "--");
-  snprintf(s_flight.next_refresh, sizeof(s_flight.next_refresh), "--");
-  snprintf(s_flight.aircraft_model, sizeof(s_flight.aircraft_model), "--");
-  snprintf(s_flight.aircraft_number, sizeof(s_flight.aircraft_number), "--");
-  snprintf(s_flight.aircraft_first_flight, sizeof(s_flight.aircraft_first_flight), "Unavailable");
-  snprintf(s_flight.aircraft_leg_1, sizeof(s_flight.aircraft_leg_1), "--");
-  snprintf(s_flight.aircraft_leg_1_status, sizeof(s_flight.aircraft_leg_1_status), "--");
-  snprintf(s_flight.aircraft_leg_2, sizeof(s_flight.aircraft_leg_2), "--");
-  snprintf(s_flight.aircraft_leg_2_status, sizeof(s_flight.aircraft_leg_2_status), "--");
-  snprintf(s_flight.booking_code, sizeof(s_flight.booking_code), "--");
-  snprintf(s_flight.seat_number, sizeof(s_flight.seat_number), "--");
-  snprintf(s_flight.seat_position, sizeof(s_flight.seat_position), "--");
+  memset(&s_transit, 0, sizeof(s_transit));
+  snprintf(s_transit.route_name, sizeof(s_transit.route_name), "TRANSIT");
+  snprintf(s_transit.route_long_name, sizeof(s_transit.route_long_name), "Nearby lines");
+  snprintf(s_transit.headsign, sizeof(s_transit.headsign), "Finding your location");
+  snprintf(s_transit.stop_name, sizeof(s_transit.stop_name), "Open settings on your phone");
+  snprintf(s_transit.mode_name, sizeof(s_transit.mode_name), "Pebble Transit");
+  snprintf(s_transit.updated, sizeof(s_transit.updated), "--");
+  s_transit.route_color = 0x29A66A;
+  s_transit.text_color = 0xFFFFFF;
+  s_transit.line_count = 1;
+  s_transit.loading = true;
+
   s_window = window_create();
-  window_set_window_handlers(s_window, (WindowHandlers){.load = window_load, .unload = window_unload});
+  window_set_background_color(s_window, GColorWhite);
+  window_set_window_handlers(s_window, (WindowHandlers){
+    .load = window_load,
+    .unload = window_unload
+  });
   window_set_click_config_provider(s_window, click_config);
   window_stack_push(s_window, true);
+
   app_message_register_inbox_received(inbox_received);
-  app_message_open(1024, 128);
+  app_message_open(2048, 256);
   tick_timer_service_subscribe(MINUTE_UNIT, tick_handler);
   s_refresh_timer = app_timer_register(REFRESH_INTERVAL_MS, refresh_timer_callback, NULL);
+  s_animation_timer = app_timer_register(ANIMATION_INTERVAL_MS, animation_timer_callback, NULL);
 }
 
 static void deinit(void) {
   if (s_refresh_timer) { app_timer_cancel(s_refresh_timer); }
-  if (s_loading_timer) { app_timer_cancel(s_loading_timer); }
+  if (s_animation_timer) { app_timer_cancel(s_animation_timer); }
   tick_timer_service_unsubscribe();
   window_destroy(s_window);
 }

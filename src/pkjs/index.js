@@ -1,194 +1,210 @@
 'use strict';
 
-var flightTools = require('./flight');
-var API_ROOT = 'https://aeroapi.flightaware.com/aeroapi';
-var CONFIG_URL = 'https://kvnsr1.github.io/pebble-flight/config/';
-var FLIGHTS_KEY = 'pebbleFlight.flights';
-var ACTIVE_KEY = 'pebbleFlight.activeIndex';
-var CACHE_KEY = 'pebbleFlight.flightCache';
-var STATE_KEY = 'pebbleFlight.refreshState';
-var DETAILS_KEY = 'pebbleFlight.aircraftDetails';
-var LEGACY_CACHE_KEY = 'pebbleFlight.lastFlight';
+var transit = require('./transit');
+var bundledApiKey = require('./private-key');
 
-function localToday() {
-  var now = new Date();
-  return new Date(now.getTime() - now.getTimezoneOffset() * 60000)
-    .toISOString().slice(0, 10);
-}
+var API_ROOT = 'https://external.transitapp.com/v4/public';
+var CONFIG_URL = 'https://kvnsr1.github.io/pebble-transit/config/';
+var SETTINGS_KEY = 'pebbleTransit.settings';
+var CACHE_KEY = 'pebbleTransit.routeCache';
+var MODES_KEY = 'pebbleTransit.modes';
+var MODES_AT_KEY = 'pebbleTransit.modesAt';
+var MIN_REFRESH_MS = 60 * 1000;
+var MODE_REFRESH_MS = 7 * 24 * 60 * 60 * 1000;
 
-function cleanFlights(flights) {
-  if (!Array.isArray(flights)) { return []; }
-  return flights.slice(0, 3).map(function(flight) {
-    return {
-      flightNumber: String(flight.flightNumber || '').trim().toUpperCase(),
-      flightDate: String(flight.flightDate || '').trim(),
-      bookingCode: String(flight.bookingCode || '').trim().toUpperCase().slice(0, 12),
-      seatNumber: String(flight.seatNumber || '').trim().toUpperCase().slice(0, 6),
-      seatPosition: /^(window|middle|aisle)$/.test(flight.seatPosition) ?
-        flight.seatPosition : ''
-    };
-  }).filter(function(flight) {
-    return flight.flightNumber && flight.flightDate;
-  });
-}
+var app = {
+  routes: [],
+  activeIndex: 0,
+  directions: {},
+  lastCoords: null,
+  lastRefreshAt: 0,
+  requestActive: false,
+  detailActive: false,
+  departureIndex: 0,
+  stops: [],
+  detailLoading: false,
+  error: '',
+  updatedAt: '--'
+};
+var tripCache = {};
 
-function savedFlights() {
-  var stored = localStorage.getItem(FLIGHTS_KEY);
-  if (stored) {
-    try { return cleanFlights(JSON.parse(stored)); } catch (ignore) {}
-  }
-  var legacyNumber = (localStorage.getItem('flightNumber') || '').toUpperCase();
-  if (!legacyNumber) { return []; }
-  return [{
-    flightNumber: legacyNumber,
-    flightDate: localStorage.getItem('flightDate') || localToday()
-  }];
-}
-
-function readJson(key) {
-  try { return JSON.parse(localStorage.getItem(key) || '{}'); }
-  catch (ignore) { return {}; }
+function readJson(key, fallback) {
+  try { return JSON.parse(localStorage.getItem(key) || '') || fallback; }
+  catch (ignore) { return fallback; }
 }
 
 function writeJson(key, value) {
-  localStorage.setItem(key, JSON.stringify(value));
+  try { localStorage.setItem(key, JSON.stringify(value)); }
+  catch (ignore) {}
 }
 
-function pruneLandedFlights(flights) {
-  var now = Date.now();
-  var states = readJson(STATE_KEY);
-  var cache = readJson(CACHE_KEY);
-  var details = readJson(DETAILS_KEY);
-  var kept = flights.filter(function(flight) {
-    var state = states[flightKey(flight)];
-    return !state || !state.actualOn || now < state.actualOn + 60 * 60 * 1000;
-  });
-  if (kept.length === flights.length) { return flights; }
+function legacyJsonParse(source) {
+  var at = 0;
+  var ch = ' ';
 
-  var retained = {};
-  kept.forEach(function(flight) { retained[flightKey(flight)] = true; });
-  Object.keys(states).forEach(function(key) { if (!retained[key]) { delete states[key]; } });
-  Object.keys(cache).forEach(function(key) { if (!retained[key]) { delete cache[key]; } });
-  Object.keys(details).forEach(function(key) { if (!retained[key]) { delete details[key]; } });
-  writeJson(STATE_KEY, states);
-  writeJson(CACHE_KEY, cache);
-  writeJson(DETAILS_KEY, details);
-  localStorage.setItem(FLIGHTS_KEY, JSON.stringify(kept));
-  var index = parseInt(localStorage.getItem(ACTIVE_KEY), 10) || 0;
-  localStorage.setItem(ACTIVE_KEY, String(Math.min(index, Math.max(0, kept.length - 1))));
-  return kept;
+  function fail(message) { throw new SyntaxError(message + ' at ' + at); }
+  function next(expected) {
+    if (expected && expected !== ch) { fail("Expected '" + expected + "'"); }
+    ch = source.charAt(at);
+    at += 1;
+    return ch;
+  }
+  function white() { while (ch && ch <= ' ') { next(); } }
+  function stringValue() {
+    var result = '';
+    var hex;
+    var value;
+    if (ch !== '"') { fail('Expected string'); }
+    while (next()) {
+      if (ch === '"') { next(); return result; }
+      if (ch === '\\') {
+        next();
+        if (ch === 'u') {
+          value = 0;
+          for (var i = 0; i < 4; i += 1) {
+            hex = parseInt(next(), 16);
+            if (!isFinite(hex)) { break; }
+            value = value * 16 + hex;
+          }
+          result += String.fromCharCode(value);
+        } else {
+          var escapes = {'"': '"', '\\': '\\', '/': '/', b: '\b', f: '\f',
+            n: '\n', r: '\r', t: '\t'};
+          if (!Object.prototype.hasOwnProperty.call(escapes, ch)) { fail('Bad escape'); }
+          result += escapes[ch];
+        }
+      } else { result += ch; }
+    }
+    fail('Bad string');
+  }
+  function numberValue() {
+    var text = '';
+    if (ch === '-') { text = '-'; next('-'); }
+    while (ch >= '0' && ch <= '9') { text += ch; next(); }
+    if (ch === '.') {
+      text += '.';
+      while (next() && ch >= '0' && ch <= '9') { text += ch; }
+    }
+    if (ch === 'e' || ch === 'E') {
+      text += ch;
+      next();
+      if (ch === '-' || ch === '+') { text += ch; next(); }
+      while (ch >= '0' && ch <= '9') { text += ch; next(); }
+    }
+    var number = Number(text);
+    if (!isFinite(number)) { fail('Bad number'); }
+    return number;
+  }
+  function wordValue() {
+    if (ch === 't') { next('t'); next('r'); next('u'); next('e'); return true; }
+    if (ch === 'f') { next('f'); next('a'); next('l'); next('s'); next('e'); return false; }
+    if (ch === 'n') { next('n'); next('u'); next('l'); next('l'); return null; }
+    fail('Unexpected token');
+  }
+  function arrayValue() {
+    var array = [];
+    next('[');
+    white();
+    if (ch === ']') { next(']'); return array; }
+    while (ch) {
+      array.push(value());
+      white();
+      if (ch === ']') { next(']'); return array; }
+      next(',');
+      white();
+    }
+    fail('Bad array');
+  }
+  function objectValue() {
+    var object = {};
+    next('{');
+    white();
+    if (ch === '}') { next('}'); return object; }
+    while (ch) {
+      var key = stringValue();
+      white();
+      next(':');
+      object[key] = value();
+      white();
+      if (ch === '}') { next('}'); return object; }
+      next(',');
+      white();
+    }
+    fail('Bad object');
+  }
+  function value() {
+    white();
+    if (ch === '{') { return objectValue(); }
+    if (ch === '[') { return arrayValue(); }
+    if (ch === '"') { return stringValue(); }
+    if (ch === '-' || (ch >= '0' && ch <= '9')) { return numberValue(); }
+    return wordValue();
+  }
+
+  next();
+  var result = value();
+  white();
+  if (ch) { fail('Unexpected trailing input'); }
+  return result;
 }
 
-function activeIndex(flights) {
-  var index = parseInt(localStorage.getItem(ACTIVE_KEY), 10);
-  if (isNaN(index) || index < 0 || index >= flights.length) { index = 0; }
-  return index;
+function parseApiJson(value) {
+  try { return JSON.parse(value); }
+  catch (firstError) {
+    // PebbleKit JS's legacy ICU build throws on some large valid JSON documents.
+    return legacyJsonParse(String(value));
+  }
 }
 
-function settings() {
-  var flights = pruneLandedFlights(savedFlights());
+function defaultModes() {
+  return [
+    {key: 'Tram', name: 'Light rail', code: 0, sortOrder: 0},
+    {key: 'Metro', name: 'Metro / subway', code: 1, sortOrder: 1},
+    {key: 'Rail', name: 'Commuter rail', code: 2, sortOrder: 2},
+    {key: 'Bus', name: 'Bus', code: 3, sortOrder: 3},
+    {key: 'Ferry', name: 'Ferry', code: 4, sortOrder: 4},
+    {key: 'CableCar', name: 'Cable car', code: 5, sortOrder: 5},
+    {key: 'Gondola', name: 'Gondola', code: 6, sortOrder: 6},
+    {key: 'Funicular', name: 'Funicular', code: 7, sortOrder: 7},
+    {key: 'Trolleybus', name: 'Trolleybus', code: 8, sortOrder: 8},
+    {key: 'Monorail', name: 'Monorail', code: 9, sortOrder: 9}
+  ];
+}
+
+function cleanSettings(raw) {
+  raw = raw || {};
+  var enabledModes = raw.enabledModes || {};
+  var favorites = Array.isArray(raw.favorites) ? raw.favorites.filter(function(value) {
+    return typeof value === 'string' && value.length < 100;
+  }).slice(0, 40) : [];
   return {
-    apiKey: localStorage.getItem('aeroApiKey') || '',
-    flights: flights,
-    activeIndex: activeIndex(flights)
+    apiKey: typeof raw.apiKey === 'string' ? raw.apiKey.trim() : '',
+    enabledModes: enabledModes,
+    favorites: favorites,
+    radius: Math.max(150, Math.min(1500, Number(raw.radius) || 700))
   };
 }
 
-function currentFlight(config) {
-  return config.flights[config.activeIndex] || null;
+function settings() {
+  var result = cleanSettings(readJson(SETTINGS_KEY, {}));
+  result.apiKey = result.apiKey || bundledApiKey || '';
+  return result;
 }
 
-function flightKey(flight) {
-  return flight.flightNumber + '|' + flight.flightDate;
+function saveSettings(value) { writeJson(SETTINGS_KEY, cleanSettings(value)); }
+
+function availableModes() {
+  return transit.modeCatalog([], readJson(MODES_KEY, defaultModes()));
 }
 
-function readCache() {
-  return readJson(CACHE_KEY);
-}
-
-function cachedMessage(flight) {
-  var cache = readCache();
-  var message = cache[flightKey(flight)];
-  if (!message && localStorage.getItem(LEGACY_CACHE_KEY)) {
-    try {
-      message = JSON.parse(localStorage.getItem(LEGACY_CACHE_KEY));
-      if (message.FLIGHT_NUMBER === flight.flightNumber && message.FLIGHT_DATE === flight.flightDate) {
-        cache[flightKey(flight)] = message;
-        localStorage.setItem(CACHE_KEY, JSON.stringify(cache));
-      } else {
-        message = null;
-      }
-    } catch (ignore) { message = null; }
-  }
-  return message;
-}
-
-function cacheMessage(flight, message) {
-  var cache = readCache();
-  cache[flightKey(flight)] = message;
-  writeJson(CACHE_KEY, cache);
-}
-
-function configuredDepartureMs(flight) {
-  return Date.parse(flight.flightDate + 'T12:00:00');
-}
-
-function immediateFlightKey(config, states) {
-  var candidates = config.flights.filter(function(flight) {
-    return !flightTools.isTerminal(states[flightKey(flight)]);
-  });
-  candidates.sort(function(a, b) {
-    return flightTools.departureMs(states[flightKey(a)], configuredDepartureMs(a)) -
-      flightTools.departureMs(states[flightKey(b)], configuredDepartureMs(b));
-  });
-  return candidates.length ? flightKey(candidates[0]) : '';
-}
-
-function nextRefreshLabel(config, flight, states, now) {
-  var key = flightKey(flight);
-  var state = states[key];
-  if (flightTools.isTerminal(state)) { return 'OFF'; }
-  var fallback = configuredDepartureMs(flight);
-  var isImmediate = key === immediateFlightKey(config, states);
-  var interval = flightTools.refreshIntervalMs(state, fallback, isImmediate, now);
-  if (interval === null) {
-    var departure = flightTools.departureMs(state, fallback);
-    if (departure - now > 7 * 24 * 60 * 60 * 1000) {
-      return flightTools.deviceLocalDateTime(departure - 7 * 24 * 60 * 60 * 1000);
-    }
-    return 'WHEN NEXT';
-  }
-  if (!state || !state.lastRequestAt) { return 'DUE NOW'; }
-  return flightTools.deviceLocalTime(new Date(state.lastRequestAt + interval).toISOString());
-}
-
-function addRefreshLabel(message, config, flight) {
-  message.NEXT_REFRESH_AT = nextRefreshLabel(
-    config, flight, readJson(STATE_KEY), Date.now());
-  return message;
-}
-
-function decorateMessage(message, config, flight) {
-  addRefreshLabel(message, config, flight);
-  message.BOOKING_CODE = flight.bookingCode || '--';
-  message.SEAT_NUMBER = flight.seatNumber || '--';
-  message.SEAT_POSITION = (flight.seatPosition || '--').toUpperCase();
-  var details = readJson(DETAILS_KEY)[flightKey(flight)];
-  if (details) {
-    Object.keys(details).forEach(function(key) {
-      if (key !== 'loaded') { message[key] = details[key]; }
-    });
-  }
-  message.AIRCRAFT_MODEL = message.AIRCRAFT_MODEL || '--';
-  message.AIRCRAFT_NUMBER = message.AIRCRAFT_NUMBER || '--';
-  message.AIRCRAFT_FIRST_FLIGHT = message.AIRCRAFT_FIRST_FLIGHT || 'Unavailable';
-  message.AIRCRAFT_LEG_1 = message.AIRCRAFT_LEG_1 || '--';
-  message.AIRCRAFT_LEG_1_STATUS = message.AIRCRAFT_LEG_1_STATUS || '--';
-  message.AIRCRAFT_LEG_1_LEVEL = message.AIRCRAFT_LEG_1_LEVEL || 0;
-  message.AIRCRAFT_LEG_2 = message.AIRCRAFT_LEG_2 || '--';
-  message.AIRCRAFT_LEG_2_STATUS = message.AIRCRAFT_LEG_2_STATUS || '--';
-  message.AIRCRAFT_LEG_2_LEVEL = message.AIRCRAFT_LEG_2_LEVEL || 0;
-  return message;
+function formatUpdated() {
+  var now = new Date();
+  var hours = now.getHours();
+  var minutes = now.getMinutes();
+  var suffix = hours >= 12 ? 'p' : 'a';
+  if (hours === 0) { hours = 12; }
+  if (hours > 12) { hours -= 12; }
+  return hours + ':' + (minutes < 10 ? '0' : '') + minutes + suffix;
 }
 
 function send(payload) {
@@ -198,251 +214,361 @@ function send(payload) {
 }
 
 function sendError(message) {
-  send({IS_LOADING: 0, ERROR_MESSAGE: message.slice(0, 80)});
+  app.error = message;
+  send({IS_LOADING: 0, ERROR_MESSAGE: message.slice(0, 78)});
 }
 
-function sendPlaceholder(config, flight) {
-  send(decorateMessage({
-    FLIGHT_NUMBER: flight.flightNumber,
-    FLIGHT_DATE: flight.flightDate,
-    ORIGIN: '---',
-    DESTINATION: '---',
-    DEPARTURE_TIME: '--',
-    ARRIVAL_TIME: '--',
-    STATUS_LABEL: 'SCHEDULED',
-    STATUS_LEVEL: 0,
-    DEPARTURE_GATE: '--',
-    DEPARTURE_TERMINAL: '--',
-    ARRIVAL_GATE: '--',
-    ARRIVAL_TERMINAL: '--',
-    AIRCRAFT_MODEL: '--',
-    AIRCRAFT_NUMBER: '--',
-    AIRCRAFT_FIRST_FLIGHT: 'Unavailable',
-    UPDATED_AT: '--',
-    ERROR_MESSAGE: '',
-    IS_LOADING: 0
-  }, config, flight));
+function currentRoute() { return app.routes[app.activeIndex] || null; }
+
+function currentDirection(route) {
+  route = route || currentRoute();
+  if (!route || !route.directions.length) { return null; }
+  var index = app.directions[route.id] || 0;
+  if (index >= route.directions.length) { index = 0; }
+  app.directions[route.id] = index;
+  return route.directions[index];
 }
 
-function showCurrent(config) {
-  var flight = currentFlight(config);
-  if (!flight) {
-    sendError('Open phone settings to add a flight');
+function stopPayload(payload) {
+  var keys = [
+    ['STOP_1_NAME', 'STOP_1_TIME'], ['STOP_2_NAME', 'STOP_2_TIME'],
+    ['STOP_3_NAME', 'STOP_3_TIME'], ['STOP_4_NAME', 'STOP_4_TIME'],
+    ['STOP_5_NAME', 'STOP_5_TIME']
+  ];
+  payload.STOP_COUNT = app.stops.length;
+  keys.forEach(function(pair, index) {
+    var stop = app.stops[index];
+    payload[pair[0]] = stop ? stop.name : '';
+    payload[pair[1]] = stop ? stop.time : 0;
+  });
+  return payload;
+}
+
+function sendCurrent() {
+  var route = currentRoute();
+  if (!route) {
+    sendError(app.error || 'No nearby lines. Check location and mode settings.');
     return;
   }
-  var cached = cachedMessage(flight);
-  if (cached) { send(decorateMessage(cached, config, flight)); }
-  else { sendPlaceholder(config, flight); }
+  var direction = currentDirection(route);
+  var departures = direction.departures;
+  var directionIndex = app.directions[route.id] || 0;
+  var payload = {
+    LINE_INDEX: app.activeIndex,
+    LINE_COUNT: app.routes.length,
+    ROUTE_NAME: route.name,
+    ROUTE_LONG_NAME: route.longName,
+    HEADSIGN: direction.headsign,
+    STOP_NAME: direction.closestStopName,
+    MODE_CODE: route.modeCode,
+    MODE_NAME: route.modeName,
+    ROUTE_COLOR: route.routeColor,
+    ROUTE_TEXT_COLOR: route.textColor,
+    IS_FAVORITE: route.favorite ? 1 : 0,
+    ETA_1: departures[0] ? departures[0].departureTime : 0,
+    ETA_2: departures[1] ? departures[1].departureTime : 0,
+    ETA_3: departures[2] ? departures[2].departureTime : 0,
+    LIVE_1: departures[0] && departures[0].realTime ? 1 : 0,
+    LIVE_2: departures[1] && departures[1].realTime ? 1 : 0,
+    LIVE_3: departures[2] && departures[2].realTime ? 1 : 0,
+    UPDATED_AT: app.updatedAt,
+    ERROR_MESSAGE: app.error,
+    IS_LOADING: app.requestActive || app.detailLoading ? 1 : 0,
+    DIRECTION_INDEX: directionIndex,
+    DIRECTION_COUNT: route.directions.length,
+    DETAIL_ACTIVE: app.detailActive ? 1 : 0,
+    DEPARTURE_INDEX: app.departureIndex
+  };
+  send(stopPayload(payload));
 }
 
 function apiError(status) {
-  if (status === 401 || status === 403) { return 'AeroAPI key was rejected; check phone settings'; }
-  if (status === 404) { return 'Flight service endpoint was not found'; }
-  if (status === 429) { return 'AeroAPI request limit reached; try again later'; }
-  if (status >= 500) { return 'FlightAware is temporarily unavailable'; }
-  return 'Flight service error (' + status + ')';
+  if (status === 401 || status === 403) { return 'Transit API key was rejected. Open phone settings.'; }
+  if (status === 429) { return 'Transit API limit reached. Saved departures shown.'; }
+  if (status >= 500) { return 'Transit is temporarily unavailable. Saved departures shown.'; }
+  return 'Transit service error (' + status + ').';
 }
 
-function dateWindow(date) {
-  var start = new Date(date + 'T00:00:00Z');
-  var end = new Date(date + 'T23:59:59Z');
-  start.setUTCDate(start.getUTCDate() - 1);
-  end.setUTCDate(end.getUTCDate() + 1);
-  return {start: start.toISOString(), end: end.toISOString()};
+function requestJson(path, params, onSuccess, onError) {
+  var config = settings();
+  if (!config.apiKey) { onError('Open phone settings to add the Transit API key.'); return; }
+  var query = Object.keys(params || {}).map(function(key) {
+    return encodeURIComponent(key) + '=' + encodeURIComponent(params[key]);
+  }).join('&');
+  var request = new XMLHttpRequest();
+  request.open('GET', API_ROOT + path + (query ? '?' + query : ''), true);
+  request.setRequestHeader('Accept', 'application/json');
+  request.setRequestHeader('Accept-Language', 'en');
+  request.setRequestHeader('apiKey', config.apiKey);
+  request.timeout = 18000;
+  request.onload = function() {
+    if (request.status < 200 || request.status >= 300) {
+      onError(apiError(request.status));
+      return;
+    }
+    var body;
+    try { body = parseApiJson(request.responseText); }
+    catch (parseError) {
+      console.log('Transit parse failure for ' + path + ' (' + parseError + '): ' +
+        String(request.responseText || '').length + ' bytes; tail=' +
+        String(request.responseText || '').slice(-120));
+      onError('Transit returned unreadable data.');
+      return;
+    }
+    try { onSuccess(body); }
+    catch (handlerError) {
+      console.log('Transit data handler failure for ' + path + ': ' + handlerError);
+      onError('Could not process Transit data.');
+    }
+  };
+  request.onerror = function() { onError('Could not reach Transit. Saved departures shown.'); };
+  request.ontimeout = function() { onError('Transit lookup timed out. Saved departures shown.'); };
+  request.send();
+}
+
+function cacheRoutes() {
+  writeJson(CACHE_KEY, {
+    routes: app.routes,
+    coords: app.lastCoords,
+    refreshedAt: app.lastRefreshAt,
+    updatedAt: app.updatedAt
+  });
+}
+
+function loadCachedRoutes() {
+  var cache = readJson(CACHE_KEY, null);
+  if (!cache || !Array.isArray(cache.routes) || !cache.routes.length) { return; }
+  app.routes = cache.routes;
+  app.lastCoords = cache.coords || null;
+  app.lastRefreshAt = cache.refreshedAt || 0;
+  app.updatedAt = cache.updatedAt || '--';
+  sendCurrent();
+}
+
+function refreshModeCatalog(coords) {
+  var refreshedAt = Number(localStorage.getItem(MODES_AT_KEY)) || 0;
+  if (Date.now() - refreshedAt < MODE_REFRESH_MS) { return; }
+  localStorage.setItem(MODES_AT_KEY, String(Date.now()));
+  requestJson('/available_networks', {
+    lat: coords.lat,
+    lon: coords.lon,
+    include_modes: true
+  }, function(body) {
+    writeJson(MODES_KEY, transit.availableModes(body, availableModes()));
+  }, function() { localStorage.removeItem(MODES_AT_KEY); });
+}
+
+function loadNearby(coords) {
+  var config = settings();
+  app.requestActive = true;
+  app.error = '';
+  if (app.routes.length) { sendCurrent(); }
+  requestJson('/nearby_routes', {
+    lat: coords.lat,
+    lon: coords.lon,
+    max_distance: config.radius,
+    max_num_departures: 3,
+    should_update_realtime: true,
+    merge_platform_stops: true,
+    include_stops_and_shapes: false,
+    stop_detailed: false
+  }, function(body) {
+    app.requestActive = false;
+    app.lastRefreshAt = Date.now();
+    app.lastCoords = coords;
+    app.updatedAt = formatUpdated();
+    var selected = currentRoute();
+    var currentId = selected && selected.id;
+    app.routes = transit.normalizeRoutes(body, config);
+    writeJson(MODES_KEY, transit.modeCatalog(app.routes, availableModes()));
+    app.activeIndex = 0;
+    if (currentId) {
+      app.routes.some(function(route, index) {
+        if (route.id === currentId) { app.activeIndex = index; return true; }
+        return false;
+      });
+    }
+    if (!app.routes.length) {
+      sendError('No enabled transit lines found within ' + config.radius + ' m.');
+      return;
+    }
+    app.error = '';
+    cacheRoutes();
+    sendCurrent();
+    refreshModeCatalog(coords);
+  }, function(message) {
+    app.requestActive = false;
+    if (app.routes.length) { app.error = message; sendCurrent(); }
+    else { sendError(message); }
+  });
 }
 
 function refresh(force) {
-  var config = settings();
-  var selected = currentFlight(config);
-  if (!config.apiKey || !selected) {
-    sendError('Open phone settings to add flights and an AeroAPI key');
+  if (app.requestActive) { return; }
+  if (!force && Date.now() - app.lastRefreshAt < MIN_REFRESH_MS) {
+    sendCurrent();
     return;
   }
-
-  var selectedKey = flightKey(selected);
-  var states = readJson(STATE_KEY);
-  var state = states[selectedKey];
-  if (flightTools.isTerminal(state)) {
-    showCurrent(config);
+  if (!settings().apiKey) {
+    sendError('Open phone settings to add the Transit API key.');
     return;
   }
-  var now = Date.now();
-  var isImmediate = selectedKey === immediateFlightKey(config, states);
-  if (!force && !flightTools.refreshIsDue(
-    state, configuredDepartureMs(selected), isImmediate, now)) {
-    showCurrent(config);
-    return;
-  }
-
-  send({IS_LOADING: 1, ERROR_MESSAGE: ''});
-  state = state || {};
-  state.lastRequestAt = now;
-  states[selectedKey] = state;
-  writeJson(STATE_KEY, states);
-  var window = dateWindow(selected.flightDate);
-  var url = API_ROOT + '/flights/' + encodeURIComponent(selected.flightNumber) +
-    '?start=' + encodeURIComponent(window.start) +
-    '&end=' + encodeURIComponent(window.end) + '&max_pages=1';
-  var request = new XMLHttpRequest();
-  request.open('GET', url, true);
-  request.setRequestHeader('Accept', 'application/json');
-  request.setRequestHeader('x-apikey', config.apiKey);
-  request.timeout = 15000;
-  function sendIfStillSelected(message) {
-    var active = currentFlight(settings());
-    if (active && flightKey(active) === selectedKey) { sendError(message); }
-  }
-  request.onload = function() {
-    if (request.status < 200 || request.status >= 300) {
-      sendIfStillSelected(apiError(request.status));
-      return;
-    }
-    try {
-      var body = JSON.parse(request.responseText);
-      var flight = flightTools.chooseFlight(body.flights || [], selected.flightDate);
-      if (!flight) {
-        sendIfStillSelected('No ' + selected.flightNumber + ' flight found on ' + selected.flightDate);
-        return;
-      }
-      var message = flightTools.toMessage(flight);
-      var latestStates = readJson(STATE_KEY);
-      latestStates[selectedKey] = flightTools.toRefreshState(flight, now);
-      writeJson(STATE_KEY, latestStates);
-      message.IS_LOADING = 0;
-      message.ERROR_MESSAGE = '';
-      decorateMessage(message, config, selected);
-      cacheMessage(selected, message);
-      var latest = currentFlight(settings());
-      if (latest && flightKey(latest) === selectedKey) { send(message); }
-    } catch (error) {
-      sendIfStillSelected('Could not read flight data');
-    }
-  };
-  request.onerror = function() { sendIfStillSelected('Could not reach FlightAware; showing saved data'); };
-  request.ontimeout = function() { sendIfStillSelected('Flight lookup timed out'); };
-  request.send();
+  navigator.geolocation.getCurrentPosition(function(position) {
+    console.log('Transit location acquired');
+    loadNearby({
+      lat: Number(position.coords.latitude).toFixed(6),
+      lon: Number(position.coords.longitude).toFixed(6)
+    });
+  }, function() {
+    if (app.lastCoords) { loadNearby(app.lastCoords); }
+    else { sendError('Location unavailable. Allow location access on your phone.'); }
+  }, {enableHighAccuracy: true, timeout: 15000, maximumAge: 45000});
 }
 
-function legDetails(flight) {
-  var status = flightTools.statusFor(flight);
-  var origin = flight.origin && (flight.origin.code_iata || flight.origin.code) || '---';
-  var destination = flight.destination &&
-    (flight.destination.code_iata || flight.destination.code) || '---';
-  return {
-    route: origin + ' > ' + destination,
-    status: status.label,
-    level: status.level
-  };
+function changeLine(delta) {
+  if (!app.routes.length) { refresh(true); return; }
+  app.activeIndex = (app.activeIndex + delta + app.routes.length) % app.routes.length;
+  app.detailActive = false;
+  app.departureIndex = 0;
+  app.stops = [];
+  app.error = '';
+  sendCurrent();
 }
 
-function loadAircraftDetails() {
-  var config = settings();
-  var selected = currentFlight(config);
-  if (!selected) { return; }
-  var key = flightKey(selected);
-  var detailsCache = readJson(DETAILS_KEY);
-  if (detailsCache[key] && (detailsCache[key].loaded ||
-      Date.now() - detailsCache[key].requestedAt < 24 * 60 * 60 * 1000)) {
-    showCurrent(config);
-    return;
-  }
-  var state = readJson(STATE_KEY)[key];
-  if (!state || !state.registration || state.registration === '--') {
-    showCurrent(config);
-    return;
-  }
-
-  detailsCache[key] = {loaded: false, requestedAt: Date.now()};
-  writeJson(DETAILS_KEY, detailsCache);
-
-  var endMs = state.scheduledOut || Date.now();
-  var startMs = endMs - 4 * 24 * 60 * 60 * 1000;
-  var url = API_ROOT + '/flights/' + encodeURIComponent(state.registration) +
-    '?start=' + encodeURIComponent(new Date(startMs).toISOString()) +
-    '&end=' + encodeURIComponent(new Date(endMs).toISOString()) + '&max_pages=1';
-  var request = new XMLHttpRequest();
-  request.open('GET', url, true);
-  request.setRequestHeader('Accept', 'application/json');
-  request.setRequestHeader('x-apikey', config.apiKey);
-  request.timeout = 15000;
-  request.onload = function() {
-    if (request.status < 200 || request.status >= 300) { return; }
-    try {
-      var flights = (JSON.parse(request.responseText).flights || []).filter(function(candidate) {
-        var departure = Date.parse(candidate.scheduled_out || candidate.scheduled_off);
-        return candidate.fa_flight_id !== state.faFlightId && departure < endMs;
-      }).sort(function(a, b) {
-        return Date.parse(b.scheduled_out || b.scheduled_off) -
-          Date.parse(a.scheduled_out || a.scheduled_off);
-      }).slice(0, 2);
-      var first = flights[0] ? legDetails(flights[0]) : null;
-      var second = flights[1] ? legDetails(flights[1]) : null;
-      detailsCache[key] = {
-        loaded: true,
-        requestedAt: Date.now(),
-        AIRCRAFT_MODEL: flightTools.aircraftModel(state.aircraftType),
-        AIRCRAFT_NUMBER: state.registration,
-        AIRCRAFT_FIRST_FLIGHT: 'Unavailable',
-        AIRCRAFT_LEG_1: first ? first.route : '--',
-        AIRCRAFT_LEG_1_STATUS: first ? first.status : '--',
-        AIRCRAFT_LEG_1_LEVEL: first ? first.level : 0,
-        AIRCRAFT_LEG_2: second ? second.route : '--',
-        AIRCRAFT_LEG_2_STATUS: second ? second.status : '--',
-        AIRCRAFT_LEG_2_LEVEL: second ? second.level : 0
-      };
-      writeJson(DETAILS_KEY, detailsCache);
-      var active = currentFlight(settings());
-      if (active && flightKey(active) === key) { showCurrent(settings()); }
-    } catch (ignore) {}
-  };
-  request.send();
+function changeDirection() {
+  var route = currentRoute();
+  if (!route) { return; }
+  app.directions[route.id] = ((app.directions[route.id] || 0) + 1) % route.directions.length;
+  app.detailActive = false;
+  app.departureIndex = 0;
+  app.stops = [];
+  app.error = '';
+  sendCurrent();
 }
 
-function nextFlight() {
-  var config = settings();
-  if (config.flights.length < 2) {
-    sendError('Add another flight in phone settings');
+function selectedDeparture() {
+  var direction = currentDirection();
+  return direction && direction.departures[app.departureIndex] || null;
+}
+
+function loadTripDetails() {
+  var direction = currentDirection();
+  var departure = selectedDeparture();
+  app.stops = [];
+  if (!direction || !departure || !departure.tripSearchKey) {
+    app.detailLoading = false;
+    sendCurrent();
     return;
   }
-  config.activeIndex = (config.activeIndex + 1) % config.flights.length;
-  localStorage.setItem(ACTIVE_KEY, String(config.activeIndex));
-  showCurrent(config);
-  refresh(false);
+  var cached = tripCache[departure.tripSearchKey];
+  if (cached && Date.now() - cached.loadedAt < 5 * 60 * 1000) {
+    app.stops = transit.upcomingStops(cached.body, direction, departure, 5);
+    app.detailLoading = false;
+    sendCurrent();
+    return;
+  }
+  app.detailLoading = true;
+  sendCurrent();
+  requestJson('/trip_details', {
+    trip_search_key: departure.tripSearchKey,
+    include_continuation: false
+  }, function(body) {
+    tripCache[departure.tripSearchKey] = {body: body, loadedAt: Date.now()};
+    app.stops = transit.upcomingStops(body, direction, departure, 5);
+    app.detailLoading = false;
+    app.error = '';
+    sendCurrent();
+  }, function(message) {
+    app.detailLoading = false;
+    app.error = message;
+    sendCurrent();
+  });
+}
+
+function openDetails() {
+  if (!currentRoute()) { return; }
+  app.detailActive = true;
+  app.departureIndex = 0;
+  app.error = '';
+  loadTripDetails();
+}
+
+function closeDetails() {
+  app.detailActive = false;
+  app.detailLoading = false;
+  app.stops = [];
+}
+
+function cycleDeparture(delta) {
+  var direction = currentDirection();
+  if (!direction || !direction.departures.length) { return; }
+  app.departureIndex = (app.departureIndex + delta + direction.departures.length) %
+    direction.departures.length;
+  loadTripDetails();
+}
+
+function toggleFavorite() {
+  var route = currentRoute();
+  if (!route) { return; }
+  var config = settings();
+  var index = config.favorites.indexOf(route.id);
+  if (index === -1) { config.favorites.push(route.id); route.favorite = true; }
+  else { config.favorites.splice(index, 1); route.favorite = false; }
+  saveSettings(config);
+  cacheRoutes();
+  sendCurrent();
 }
 
 Pebble.addEventListener('ready', function() {
-  var config = settings();
-  showCurrent(config);
-  refresh(false);
+  loadCachedRoutes();
+  refresh(true);
 });
 
 Pebble.addEventListener('appmessage', function(event) {
-  if (event.payload.REQUEST_NEXT_FLIGHT) { nextFlight(); }
-  else if (event.payload.REQUEST_AIRCRAFT_DETAILS) { loadAircraftDetails(); }
-  else if (event.payload.REQUEST_REFRESH) { refresh(event.payload.REQUEST_REFRESH === 1); }
+  var payload = event.payload;
+  if (payload.REQUEST_LINE_DELTA) { changeLine(Number(payload.REQUEST_LINE_DELTA)); }
+  else if (payload.REQUEST_DIRECTION) { changeDirection(); }
+  else if (payload.REQUEST_DETAILS) {
+    if (Number(payload.REQUEST_DETAILS) === 2) { closeDetails(); }
+    else { openDetails(); }
+  }
+  else if (payload.REQUEST_DEPARTURE) { cycleDeparture(Number(payload.REQUEST_DEPARTURE)); }
+  else if (payload.REQUEST_TOGGLE_FAVORITE) { toggleFavorite(); }
+  else if (payload.REQUEST_REFRESH) { refresh(payload.REQUEST_REFRESH === 1); }
 });
 
 Pebble.addEventListener('showConfiguration', function() {
   var config = settings();
-  var state = {flights: config.flights, hasApiKey: Boolean(config.apiKey)};
+  var state = {
+    hasApiKey: Boolean(config.apiKey),
+    enabledModes: config.enabledModes,
+    favorites: config.favorites,
+    radius: config.radius,
+    modes: availableModes(),
+    lines: app.routes.map(function(route) {
+      return {
+        id: route.id,
+        name: route.name,
+        longName: route.longName,
+        modeName: route.modeName,
+        color: route.routeColor
+      };
+    })
+  };
   Pebble.openURL(CONFIG_URL + '#state=' + encodeURIComponent(JSON.stringify(state)));
 });
 
 Pebble.addEventListener('webviewclosed', function(event) {
   if (!event.response || event.response === 'CANCELLED') { return; }
   try {
-    var config = JSON.parse(decodeURIComponent(event.response));
-    var flights = cleanFlights(config.flights);
-    if (!flights.length) {
-      sendError('Add at least one flight in phone settings');
-      return;
-    }
-    if (config.apiKey) { localStorage.setItem('aeroApiKey', config.apiKey); }
-    localStorage.setItem(FLIGHTS_KEY, JSON.stringify(flights));
-    localStorage.setItem(ACTIVE_KEY, '0');
-    showCurrent(settings());
-    refresh(false);
-  } catch (error) {
-    sendError('Settings could not be saved');
-  }
+    var result = JSON.parse(decodeURIComponent(event.response));
+    var current = settings();
+    if (result.apiKey) { current.apiKey = String(result.apiKey).trim(); }
+    current.enabledModes = result.enabledModes || {};
+    current.favorites = Array.isArray(result.favorites) ? result.favorites : current.favorites;
+    current.radius = result.radius;
+    saveSettings(current);
+    app.lastRefreshAt = 0;
+    refresh(true);
+  } catch (ignore) { sendError('Settings could not be saved.'); }
 });

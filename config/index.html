@@ -2,300 +2,330 @@
 <html lang="en">
 <head>
   <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width,initial-scale=1">
-  <meta name="theme-color" content="#081421">
-  <title>Pebble Flight Settings</title>
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+  <meta name="theme-color" content="#101713">
+  <title>Pebble Transit Settings</title>
   <style>
     :root {
       color-scheme: dark;
       font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-      --ink: #f7fbff;
-      --muted: #9db0c4;
-      --panel: rgba(15, 36, 55, .86);
-      --line: rgba(157, 190, 216, .22);
-      --sky: #42d7ff;
-      --navy: #081421;
+      --ink: #f6faf7;
+      --muted: #a6b5aa;
+      --surface: #18221c;
+      --surface-2: #202c25;
+      --line: rgba(225, 241, 230, .12);
+      --green: #66e39a;
+      --lime: #c9f263;
     }
     * { box-sizing: border-box; }
     body {
       min-height: 100vh;
       margin: 0;
       background:
-        radial-gradient(circle at 15% 0%, rgba(27, 113, 157, .34), transparent 34rem),
-        linear-gradient(155deg, #081421 0%, #0a1d2d 58%, #07111c 100%);
+        radial-gradient(circle at 92% -5%, rgba(102, 227, 154, .19), transparent 24rem),
+        linear-gradient(160deg, #101713, #0d120f 72%);
       color: var(--ink);
     }
     body::before {
-      content: "";
       position: fixed;
       inset: 0;
       pointer-events: none;
-      opacity: .13;
-      background-image: linear-gradient(rgba(255,255,255,.18) 1px, transparent 1px), linear-gradient(90deg, rgba(255,255,255,.18) 1px, transparent 1px);
-      background-size: 28px 28px;
-      mask-image: linear-gradient(to bottom, black, transparent 62%);
-    }
-    main { position: relative; width: min(100%, 520px); margin: auto; padding: 24px 18px 40px; }
-    .brand { display: flex; align-items: center; gap: 13px; margin-bottom: 10px; }
-    .brand-mark {
-      display: grid;
-      width: 44px;
-      height: 44px;
-      place-items: center;
-      border: 1px solid rgba(66, 215, 255, .48);
-      border-radius: 14px;
-      background: linear-gradient(145deg, rgba(66,215,255,.22), rgba(66,215,255,.04));
-      box-shadow: 0 12px 30px rgba(0, 0, 0, .25);
-      color: var(--sky);
-      font-size: 22px;
-      transform: rotate(-8deg);
-    }
-    .eyebrow { margin: 0 0 2px; color: var(--sky); font-size: .75rem; font-weight: 800; letter-spacing: .16em; text-transform: uppercase; }
-    h1 { margin: 0; font-size: clamp(1.75rem, 7vw, 2.25rem); letter-spacing: -.04em; }
-    .intro { margin: 8px 0 20px; color: var(--muted); font-size: 1rem; line-height: 1.5; }
-    .flight-card {
-      position: relative;
-      margin: 14px 0;
-      padding: 8px 16px 17px;
-      overflow: hidden;
-      border: 1px solid var(--line);
-      border-radius: 18px;
-      background: linear-gradient(145deg, rgba(21, 51, 76, .96), rgba(12, 31, 48, .96));
-      box-shadow: 0 18px 42px rgba(0, 0, 0, .24);
-      transition: border-color .2s ease, opacity .2s ease, transform .2s ease;
-      animation: arrive .42s both;
-    }
-    .flight-card:nth-child(2) { animation-delay: .06s; }
-    .flight-card:nth-child(3) { animation-delay: .12s; }
-    .flight-card:not(.is-active) { opacity: .66; }
-    .flight-card:focus-within { border-color: rgba(66, 215, 255, .66); transform: translateY(-2px); opacity: 1; }
-    .flight-card::after {
       content: "";
+      opacity: .06;
+      background-image: linear-gradient(rgba(255,255,255,.18) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(255,255,255,.18) 1px, transparent 1px);
+      background-size: 32px 32px;
+      mask-image: linear-gradient(to bottom, black, transparent 72%);
+    }
+    main { position: relative; width: min(100%, 560px); margin: auto; padding: 24px 16px 42px; }
+    header { display: flex; align-items: center; gap: 14px; margin: 2px 2px 22px; }
+    .mark {
+      position: relative;
+      width: 51px;
+      height: 51px;
+      flex: 0 0 auto;
+      border-radius: 16px;
+      background: linear-gradient(145deg, var(--green), #38bd73);
+      box-shadow: 0 14px 36px rgba(25, 158, 84, .22);
+    }
+    .mark::before {
       position: absolute;
-      top: 0;
-      right: 0;
-      width: 70px;
-      height: 4px;
-      border-radius: 0 18px 0 8px;
-      background: var(--accent, var(--sky));
+      top: 12px;
+      left: 12px;
+      width: 27px;
+      height: 23px;
+      border: 3px solid #102017;
+      border-radius: 8px 8px 5px 5px;
+      content: "";
     }
-    legend { padding: 0 8px 0 0; }
-    .legend-row { display: inline-flex; align-items: center; gap: 8px; color: #dce9f3; font-size: .9rem; font-weight: 800; }
-    .slot {
+    .mark::after {
+      position: absolute;
+      top: 19px;
+      left: 18px;
+      width: 15px;
+      height: 7px;
+      border-block: 3px solid #102017;
+      content: "";
+    }
+    .eyebrow { margin: 0 0 2px; color: var(--green); font-size: .72rem; font-weight: 850; letter-spacing: .17em; text-transform: uppercase; }
+    h1 { margin: 0; font-size: 2rem; letter-spacing: -.045em; }
+    .intro { margin: 5px 0 0; color: var(--muted); font-size: .9rem; }
+    section {
+      margin: 14px 0;
+      padding: 17px;
+      border: 1px solid var(--line);
+      border-radius: 20px;
+      background: linear-gradient(145deg, rgba(31, 44, 36, .96), rgba(20, 29, 24, .96));
+      box-shadow: 0 18px 42px rgba(0, 0, 0, .19);
+      animation: rise .42s both;
+    }
+    section:nth-of-type(2) { animation-delay: .05s; }
+    section:nth-of-type(3) { animation-delay: .1s; }
+    section:nth-of-type(4) { animation-delay: .15s; }
+    .section-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; margin-bottom: 13px; }
+    h2 { margin: 0; font-size: 1.08rem; letter-spacing: -.01em; }
+    .hint { margin: 3px 0 0; color: var(--muted); font-size: .79rem; line-height: 1.4; }
+    .badge { padding: 5px 8px; border-radius: 999px; background: rgba(102,227,154,.1); color: var(--green); font-size: .72rem; font-weight: 800; white-space: nowrap; }
+    .modes { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 9px; }
+    .mode { position: relative; }
+    .mode input { position: absolute; opacity: 0; pointer-events: none; }
+    .mode label {
+      display: flex;
+      min-height: 51px;
+      align-items: center;
+      gap: 10px;
+      padding: 10px 11px;
+      border: 1px solid rgba(225, 241, 230, .11);
+      border-radius: 13px;
+      background: rgba(8, 14, 10, .34);
+      color: #b8c6bc;
+      cursor: pointer;
+      transition: .18s ease;
+    }
+    .mode-icon {
       display: grid;
-      width: 25px;
-      height: 25px;
+      width: 28px;
+      height: 28px;
+      flex: 0 0 auto;
       place-items: center;
-      border-radius: 8px;
-      background: var(--accent, var(--sky));
-      color: #07111c;
-      font-size: .78rem;
+      border-radius: 9px;
+      background: rgba(255,255,255,.06);
+      font-size: .92rem;
     }
-    .optional { color: var(--muted); font-size: .75rem; font-weight: 650; }
-    .route-preview { display: grid; grid-template-columns: 54px 1fr 54px; align-items: center; gap: 9px; margin: 10px 0 3px; }
-    .route-code { overflow: hidden; color: var(--ink); font-size: 1.15rem; font-weight: 850; letter-spacing: .03em; text-overflow: ellipsis; white-space: nowrap; }
-    .route-code:last-child { text-align: right; }
-    .route-line { position: relative; height: 18px; }
-    .route-line::before { content: ""; position: absolute; top: 8px; right: 0; left: 0; border-top: 1px dashed rgba(214, 232, 246, .46); }
-    .route-line::after { content: "✈"; position: absolute; top: -4px; left: calc(50% - 9px); color: var(--accent, var(--sky)); font-size: 17px; transform: rotate(3deg); transition: left .35s ease; }
-    .flight-card:focus-within .route-line::after { left: calc(68% - 9px); }
-    .fields { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 12px; }
-    label { display: block; margin: 12px 0 6px; color: #bfd0de; font-size: .88rem; font-weight: 750; }
-    input, select {
+    .mode input:checked + label { border-color: rgba(102,227,154,.45); background: rgba(102,227,154,.1); color: var(--ink); }
+    .mode input:checked + label .mode-icon { background: var(--green); color: #102017; }
+    .mode input:focus-visible + label { outline: 2px solid var(--lime); outline-offset: 2px; }
+    .line-list { display: grid; gap: 9px; }
+    .line-card {
+      display: grid;
+      grid-template-columns: 48px minmax(0, 1fr) auto;
+      align-items: center;
+      gap: 12px;
+      padding: 10px;
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      background: rgba(7, 12, 9, .28);
+    }
+    .route-chip { display: grid; width: 44px; height: 40px; place-items: center; border-radius: 12px; color: white; font-size: .86rem; font-weight: 900; }
+    .line-title { overflow: hidden; font-weight: 800; text-overflow: ellipsis; white-space: nowrap; }
+    .line-meta { margin-top: 2px; color: var(--muted); font-size: .76rem; }
+    .pin {
+      width: 38px;
+      height: 38px;
+      margin: 0;
+      padding: 0;
+      border: 1px solid rgba(225,241,230,.13);
+      border-radius: 12px;
+      background: rgba(255,255,255,.04);
+      color: #819087;
+      box-shadow: none;
+      font-size: 1rem;
+    }
+    .pin.is-pinned { border-color: rgba(201,242,99,.48); background: rgba(201,242,99,.12); color: var(--lime); }
+    .empty { padding: 16px; border: 1px dashed rgba(225,241,230,.18); border-radius: 13px; color: var(--muted); font-size: .84rem; line-height: 1.45; text-align: center; }
+    .range-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 14px; }
+    input[type="range"] { width: 100%; accent-color: var(--green); }
+    output { min-width: 70px; padding: 7px 9px; border-radius: 10px; background: rgba(102,227,154,.1); color: var(--green); font-weight: 850; text-align: center; }
+    details { border-top: 1px solid var(--line); }
+    summary { padding: 14px 0 2px; color: #dbe7de; cursor: pointer; font-size: .88rem; font-weight: 760; }
+    label.key-label { display: block; margin: 13px 0 7px; color: #dbe7de; font-size: .86rem; font-weight: 780; }
+    input[type="password"] {
       width: 100%;
-      min-height: 48px;
-      padding: 11px 12px;
-      border: 1px solid rgba(174, 203, 225, .25);
-      border-radius: 11px;
+      min-height: 49px;
+      padding: 11px 13px;
+      border: 1px solid rgba(225,241,230,.18);
+      border-radius: 12px;
       outline: none;
-      background: rgba(5, 19, 31, .72);
+      background: rgba(5, 10, 7, .56);
       color: var(--ink);
       font: inherit;
-      font-size: 1rem;
-      transition: border-color .18s ease, box-shadow .18s ease, background .18s ease;
     }
-    input::placeholder { color: #647a8e; }
-    input:focus, select:focus { border-color: var(--sky); background: rgba(5, 19, 31, .96); box-shadow: 0 0 0 3px rgba(66, 215, 255, .13); }
-    .key-panel { margin-top: 18px; padding: 16px; border: 1px solid var(--line); border-radius: 18px; background: rgba(9, 27, 42, .8); }
-    .key-panel label { margin-top: 0; color: var(--ink); }
-    small { display: block; margin-top: 8px; color: var(--muted); font-size: .8rem; line-height: 1.4; }
-    .notice { display: flex; align-items: center; gap: 10px; margin: 14px 0 0; color: #c7d8e5; font-size: .88rem; line-height: 1.4; }
-    .live-dot { width: 9px; height: 9px; flex: 0 0 auto; border-radius: 50%; background: #59e391; box-shadow: 0 0 0 5px rgba(89, 227, 145, .1); animation: pulse 2s infinite; }
-    button {
+    input[type="password"]:focus { border-color: var(--green); box-shadow: 0 0 0 3px rgba(102,227,154,.11); }
+    .save {
       width: 100%;
-      margin-top: 18px;
-      padding: 15px 18px;
+      margin-top: 7px;
+      padding: 16px 18px;
       border: 0;
-      border-radius: 14px;
-      background: linear-gradient(115deg, var(--sky), #77e6ff);
-      box-shadow: 0 14px 34px rgba(32, 171, 211, .24);
-      color: #06131e;
+      border-radius: 15px;
+      background: linear-gradient(115deg, var(--green), var(--lime));
+      box-shadow: 0 16px 38px rgba(57, 194, 114, .22);
+      color: #0d1a12;
       font: inherit;
-      font-size: 1rem;
-      font-weight: 850;
+      font-weight: 900;
       cursor: pointer;
-      transition: transform .16s ease, box-shadow .16s ease;
+      transition: transform .16s ease;
     }
-    button:hover { transform: translateY(-2px); box-shadow: 0 18px 38px rgba(32, 171, 211, .3); }
-    button:active { transform: translateY(1px) scale(.99); }
-    @keyframes arrive { from { opacity: 0; transform: translateY(10px); } }
-    @keyframes pulse { 50% { box-shadow: 0 0 0 8px rgba(89, 227, 145, 0); } }
-    @media (max-width: 390px) {
-      main { padding-inline: 13px; }
-      .fields { grid-template-columns: 1fr; gap: 0; }
-      .flight-card { padding-inline: 13px; }
-    }
-    @media (prefers-reduced-motion: reduce) {
-      *, *::before, *::after { animation: none !important; transition: none !important; }
-    }
+    .save:active { transform: translateY(1px) scale(.99); }
+    @keyframes rise { from { opacity: 0; transform: translateY(9px); } }
+    @media (max-width: 380px) { .modes { grid-template-columns: 1fr; } }
+    @media (prefers-reduced-motion: reduce) { * { animation: none !important; transition: none !important; } }
   </style>
 </head>
 <body>
 <main>
-  <header class="brand">
-    <div class="brand-mark" aria-hidden="true">✈</div>
+  <header>
+    <div class="mark" aria-hidden="true"></div>
     <div>
-      <p class="eyebrow">Flight deck</p>
-      <h1>Pebble Flight</h1>
+      <p class="eyebrow">Nearby, live</p>
+      <h1>Pebble Transit</h1>
+      <p class="intro">Choose what reaches your wrist.</p>
     </div>
   </header>
-  <p class="intro">Keep your next three trips on your wrist. Long-press Select to move between them.</p>
+
   <form id="settings">
-    <div id="flights"></div>
-    <section class="key-panel" aria-labelledby="apiKeyLabel">
-      <label id="apiKeyLabel" for="apiKey">FlightAware AeroAPI key</label>
-      <input id="apiKey" type="password" autocomplete="off" placeholder="Paste your AeroAPI key">
-      <small id="keyHelp">Stored by the Pebble app on this phone—not in this page’s URL.</small>
-      <p class="notice"><span class="live-dot" aria-hidden="true"></span>Refresh timing adapts as the next flight approaches.</p>
+    <section>
+      <div class="section-head">
+        <div><h2>Transit modes</h2><p class="hint">These classifications come from Transit for your local networks.</p></div>
+        <span class="badge" id="modeCount">All on</span>
+      </div>
+      <div class="modes" id="modes"></div>
     </section>
-    <button id="saveButton" type="submit">Save flights &nbsp;→</button>
+
+    <section>
+      <div class="section-head">
+        <div><h2>Pinned lines</h2><p class="hint">Pinned lines sort to the top whenever they’re nearby.</p></div>
+        <span class="badge" id="pinCount">0 pinned</span>
+      </div>
+      <div class="line-list" id="lines"></div>
+    </section>
+
+    <section>
+      <div class="section-head">
+        <div><h2>Nearby radius</h2><p class="hint">A wider search reveals more lines but may be less glanceable.</p></div>
+      </div>
+      <div class="range-row">
+        <input id="radius" type="range" min="150" max="1500" step="50" value="700">
+        <output id="radiusValue" for="radius">700 m</output>
+      </div>
+    </section>
+
+    <section>
+      <div class="section-head">
+        <div><h2>Live data</h2><p class="hint">Refreshes at most once per minute while the watch app is open.</p></div>
+        <span class="badge">Transit v4</span>
+      </div>
+      <details>
+        <summary>API credential</summary>
+        <label class="key-label" for="apiKey">Transit Public API key</label>
+        <input id="apiKey" type="password" autocomplete="off" placeholder="Leave blank to keep saved key">
+        <p class="hint" id="keyHint">The key stays in the Pebble phone app and is not sent to this settings page.</p>
+      </details>
+    </section>
+
+    <button class="save" id="saveButton" type="submit">Save to Pebble &nbsp;→</button>
   </form>
 </main>
 <script>
-  var params = new URLSearchParams(location.search);
-  var initialState = {};
+  var state = {};
   if (location.hash.indexOf('#state=') === 0) {
-    try { initialState = JSON.parse(decodeURIComponent(location.hash.slice(7))); }
-    catch (ignore) { initialState = {}; }
+    try { state = JSON.parse(decodeURIComponent(location.hash.slice(7))); }
+    catch (ignore) { state = {}; }
   }
-  var flights = document.getElementById('flights');
-  var today = new Date();
-  var localToday = new Date(today.getTime() - today.getTimezoneOffset() * 60000)
-    .toISOString().slice(0, 10);
-  var accents = ['#42d7ff', '#ffd45c', '#59e391'];
+  var favorites = Array.isArray(state.favorites) ? state.favorites.slice() : [];
+  var enabledModes = state.enabledModes || {};
+  var modes = Array.isArray(state.modes) ? state.modes : [];
+  var lines = Array.isArray(state.lines) ? state.lines : [];
+  var modeGlyphs = ['⌁', 'M', '▥', '▣', '≈', '◇', '⌃', '↗', '▤', '—'];
 
-  function previewValue(value, fallback) {
-    return value ? value.toUpperCase() : fallback;
-  }
-
-  function updateCard(index) {
-    var card = document.getElementById('flightCard' + index);
-    var number = document.getElementById('flightNumber' + index).value.trim();
-    var date = document.getElementById('flightDate' + index).value;
-    document.getElementById('routeNumber' + index).textContent = previewValue(number, 'FLIGHT');
-    document.getElementById('routeDate' + index).textContent = date ? date.slice(5).replace('-', '/') : 'DATE';
-    card.classList.toggle('is-active', Boolean(number || index === 1));
+  function hexColor(value) {
+    var hex = Number(value || 0x29a66a).toString(16);
+    return '#' + ('000000' + hex).slice(-6);
   }
 
-  for (var i = 1; i <= 3; i += 1) {
-    var fieldset = document.createElement('fieldset');
-    var savedFlight = initialState.flights && initialState.flights[i - 1] || {};
-    var number = savedFlight.flightNumber || params.get('f' + i) ||
-      (i === 1 ? params.get('flightNumber') : '') || '';
-    var date = savedFlight.flightDate || params.get('d' + i) ||
-      (i === 1 ? params.get('flightDate') : '') || '';
-    fieldset.id = 'flightCard' + i;
-    fieldset.className = 'flight-card';
-    fieldset.style.setProperty('--accent', accents[i - 1]);
-    fieldset.innerHTML =
-      '<legend><span class="legend-row"><span class="slot">0' + i + '</span>Flight ' + i +
-        (i === 1 ? '' : ' <span class="optional">optional</span>') + '</span></legend>' +
-      '<div class="route-preview" aria-hidden="true"><span class="route-code" id="routeNumber' + i + '">FLIGHT</span>' +
-        '<span class="route-line"></span><span class="route-code" id="routeDate' + i + '">DATE</span></div>' +
-      '<div class="fields"><div><label for="flightNumber' + i + '">Flight number</label>' +
-        '<input id="flightNumber' + i + '" placeholder="' + (i === 1 ? 'AA100' : 'Optional') + '" ' +
-        'autocapitalize="characters" autocomplete="off" spellcheck="false" maxlength="12" pattern="[A-Za-z0-9]{2,12}"></div>' +
-      '<div><label for="flightDate' + i + '">Departure date</label>' +
-        '<input id="flightDate' + i + '" type="date"></div></div>' +
-      '<div class="fields"><div><label for="bookingCode' + i + '">Booking code</label>' +
-        '<input id="bookingCode' + i + '" placeholder="Optional" autocapitalize="characters" autocomplete="off" ' +
-        'spellcheck="false" maxlength="12"></div>' +
-      '<div><label for="seatNumber' + i + '">Seat number</label>' +
-        '<input id="seatNumber' + i + '" placeholder="12A" autocapitalize="characters" autocomplete="off" ' +
-        'spellcheck="false" maxlength="6"></div></div>' +
-      '<div><label for="seatPosition' + i + '">Seat position</label>' +
-        '<select id="seatPosition' + i + '"><option value="">Choose position</option>' +
-        '<option value="window">Window</option><option value="middle">Middle</option>' +
-        '<option value="aisle">Aisle</option></select></div>';
-    flights.appendChild(fieldset);
-    document.getElementById('flightNumber' + i).value = number;
-    document.getElementById('flightDate' + i).value = date || (i === 1 ? localToday : '');
-    document.getElementById('bookingCode' + i).value = savedFlight.bookingCode || '';
-    document.getElementById('seatNumber' + i).value = savedFlight.seatNumber || '';
-    document.getElementById('seatPosition' + i).value = savedFlight.seatPosition || '';
-    (function(index) {
-      document.getElementById('flightNumber' + index).addEventListener('input', function() { updateCard(index); });
-      document.getElementById('flightDate' + index).addEventListener('input', function() { updateCard(index); });
-    })(i);
-    updateCard(i);
+  function updateModeCount() {
+    var checked = document.querySelectorAll('.mode input:checked').length;
+    document.getElementById('modeCount').textContent = checked === modes.length ? 'All on' : checked + ' on';
   }
 
-  document.getElementById('flightNumber1').required = true;
-  document.getElementById('flightDate1').required = true;
+  modes.forEach(function(mode, index) {
+    var id = 'mode' + index;
+    var wrapper = document.createElement('div');
+    wrapper.className = 'mode';
+    var checked = enabledModes[mode.key] !== false;
+    wrapper.innerHTML = '<input type="checkbox" id="' + id + '" data-key="' +
+      encodeURIComponent(mode.key) + '" ' + (checked ? 'checked' : '') + '>' +
+      '<label for="' + id + '"><span class="mode-icon" aria-hidden="true">' +
+      (modeGlyphs[Number(mode.code)] || '•') + '</span><span>' +
+      String(mode.name || mode.key).replace(/[<>&]/g, '') + '</span></label>';
+    document.getElementById('modes').appendChild(wrapper);
+    wrapper.querySelector('input').addEventListener('change', updateModeCount);
+  });
+  updateModeCount();
 
-  if (initialState.hasApiKey || params.get('hasApiKey') === '1') {
-    document.getElementById('apiKey').placeholder = 'Leave blank to keep saved key';
-    document.getElementById('keyHelp').textContent =
-      'A key is already saved. Leave this blank to keep it, or enter a replacement.';
+  function updatePinCount() {
+    document.getElementById('pinCount').textContent = favorites.length +
+      (favorites.length === 1 ? ' pinned' : ' pinned');
+  }
+
+  if (!lines.length) {
+    document.getElementById('lines').innerHTML =
+      '<div class="empty">Open Pebble Transit once near transit, then return here to pin lines. You can also hold the watch’s Up button on any line.</div>';
+  }
+  lines.forEach(function(line) {
+    var row = document.createElement('div');
+    row.className = 'line-card';
+    var pinned = favorites.indexOf(line.id) !== -1;
+    row.innerHTML = '<div class="route-chip" style="background:' + hexColor(line.color) + '">' +
+      String(line.name || 'Line').replace(/[<>&]/g, '') + '</div>' +
+      '<div><div class="line-title">' + String(line.longName || line.name).replace(/[<>&]/g, '') +
+      '</div><div class="line-meta">' + String(line.modeName || 'Transit').replace(/[<>&]/g, '') +
+      '</div></div><button class="pin ' + (pinned ? 'is-pinned' : '') +
+      '" type="button" aria-label="Pin line">◆</button>';
+    var button = row.querySelector('.pin');
+    button.addEventListener('click', function() {
+      var index = favorites.indexOf(line.id);
+      if (index === -1) { favorites.push(line.id); button.classList.add('is-pinned'); }
+      else { favorites.splice(index, 1); button.classList.remove('is-pinned'); }
+      updatePinCount();
+    });
+    document.getElementById('lines').appendChild(row);
+  });
+  updatePinCount();
+
+  var radius = document.getElementById('radius');
+  radius.value = Math.max(150, Math.min(1500, Number(state.radius) || 700));
+  function updateRadius() { document.getElementById('radiusValue').textContent = radius.value + ' m'; }
+  radius.addEventListener('input', updateRadius);
+  updateRadius();
+
+  if (!state.hasApiKey) {
+    document.getElementById('apiKey').placeholder = 'Paste your Transit Public API key';
+    document.getElementById('keyHint').textContent = 'A key is required for nearby live departures.';
   }
 
   document.getElementById('settings').addEventListener('submit', function(event) {
     event.preventDefault();
-    var resultFlights = [];
-    for (var i = 1; i <= 3; i += 1) {
-      var numberInput = document.getElementById('flightNumber' + i);
-      var dateInput = document.getElementById('flightDate' + i);
-      var bookingInput = document.getElementById('bookingCode' + i);
-      var seatInput = document.getElementById('seatNumber' + i);
-      var positionInput = document.getElementById('seatPosition' + i);
-      numberInput.setCustomValidity('');
-      dateInput.setCustomValidity('');
-      seatInput.setCustomValidity('');
-      var number = numberInput.value.trim().toUpperCase();
-      var date = dateInput.value;
-      var bookingCode = bookingInput.value.trim().toUpperCase();
-      var seatNumber = seatInput.value.trim().toUpperCase();
-      var seatPosition = positionInput.value;
-      if (number && !date) {
-        dateInput.setCustomValidity('Choose a departure date for this flight.');
-        dateInput.reportValidity();
-        return;
-      }
-      if (!number && (date || bookingCode || seatNumber || seatPosition)) {
-        numberInput.setCustomValidity('Enter a flight number or clear this flight card.');
-        numberInput.reportValidity();
-        return;
-      }
-      if (seatPosition && !seatNumber) {
-        seatInput.setCustomValidity('Enter a seat number for this position.');
-        seatInput.reportValidity();
-        return;
-      }
-      if (number) {
-        resultFlights.push({
-          flightNumber: number,
-          flightDate: date,
-          bookingCode: bookingCode,
-          seatNumber: seatNumber,
-          seatPosition: seatPosition
-        });
-      }
-    }
+    var resultModes = {};
+    Array.prototype.forEach.call(document.querySelectorAll('.mode input'), function(input) {
+      resultModes[decodeURIComponent(input.getAttribute('data-key'))] = input.checked;
+    });
     var result = {
-      flights: resultFlights,
-      apiKey: document.getElementById('apiKey').value.trim()
+      apiKey: document.getElementById('apiKey').value.trim(),
+      enabledModes: resultModes,
+      favorites: favorites,
+      radius: Number(radius.value)
     };
-    document.getElementById('saveButton').textContent = 'Ready for takeoff  ✓';
+    document.getElementById('saveButton').textContent = 'Saved to your wrist  ✓';
     requestAnimationFrame(function() {
       location.href = 'pebblejs://close#' + encodeURIComponent(JSON.stringify(result));
     });

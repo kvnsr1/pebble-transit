@@ -4,3 +4,4 @@ node_modules/
 .lock-waf_*
 .DS_Store
 *.pbw
+src/pkjs/private-key.js
