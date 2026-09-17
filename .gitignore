@@ -1,6 +1,7 @@
 build/
 node_modules/
 .tools/
+.tools
 .lock-waf_*
 .DS_Store
 *.pbw
