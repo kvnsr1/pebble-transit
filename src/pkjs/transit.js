@@ -85,7 +85,8 @@ function normalizeDirection(merged) {
       scheduledTime: Number(item.scheduled_departure_time || item.departure_time) || 0,
       realTime: Boolean(item.is_real_time),
       tripSearchKey: text(item.trip_search_key),
-      itineraryId: text(item.internal_itinerary_id)
+      itineraryId: text(item.internal_itinerary_id),
+      rtTripId: text(item.rt_trip_id)
     };
   });
   return {
@@ -187,9 +188,64 @@ function upcomingStops(body, direction, departure, limit) {
     departure.scheduledTime || departure.departureTime;
   var offset = departure.departureTime - scheduledAtStart;
   return items.slice(startIndex, startIndex + (limit || 5)).map(function(item) {
+    var scheduledTime = Number(item.departure_time || item.arrival_time) || scheduledAtStart;
     return {
+      id: text(item.stop && item.stop.global_stop_id),
       name: compact(item.stop && item.stop.stop_name || 'Stop', 34),
-      time: (Number(item.departure_time || item.arrival_time) || scheduledAtStart) + offset
+      scheduledTime: scheduledTime,
+      time: scheduledTime + offset,
+      realTime: Boolean(departure.realTime)
+    };
+  });
+}
+
+function routeAtStop(body, routeId, stopId) {
+  var rows = body && body.route_departures || [];
+  for (var i = 0; i < rows.length; i += 1) {
+    if (text(rows[i].global_route_id) === routeId &&
+        (!stopId || text(rows[i].global_stop_id) === stopId)) {
+      return rows[i];
+    }
+  }
+  return null;
+}
+
+function directionAtStop(route, directionId) {
+  var directions = route && route.merged_itineraries || [];
+  for (var i = 0; i < directions.length; i += 1) {
+    if (Number(directions[i].direction_id) === Number(directionId)) { return directions[i]; }
+  }
+  return null;
+}
+
+function liveDepartures(body, routeId, direction) {
+  if (!direction) { return []; }
+  var route = routeAtStop(body, routeId, direction.closestStopId);
+  var merged = directionAtStop(route, direction.directionId);
+  return merged ? normalizeDirection(merged).departures : [];
+}
+
+function liveStopTimes(body, routeId, direction, departure, stops) {
+  if (!direction || !departure) { return stops || []; }
+  return (stops || []).map(function(stop) {
+    var route = routeAtStop(body, routeId, stop.id);
+    var merged = directionAtStop(route, direction.directionId);
+    var items = merged && merged.schedule_items || [];
+    var match = null;
+    for (var i = 0; i < items.length; i += 1) {
+      if ((departure.tripSearchKey && text(items[i].trip_search_key) === departure.tripSearchKey) ||
+          (departure.rtTripId && text(items[i].rt_trip_id) === departure.rtTripId)) {
+        match = items[i];
+        break;
+      }
+    }
+    if (!match) { return stop; }
+    return {
+      id: stop.id,
+      name: stop.name,
+      scheduledTime: stop.scheduledTime,
+      time: Number(match.departure_time || match.arrival_time) || stop.time,
+      realTime: Boolean(match.is_real_time)
     };
   });
 }
@@ -200,6 +256,8 @@ module.exports = {
   displayRouteName: displayRouteName,
   modeCatalog: modeCatalog,
   modeFor: modeFor,
+  liveDepartures: liveDepartures,
+  liveStopTimes: liveStopTimes,
   normalizeRoutes: normalizeRoutes,
   upcomingStops: upcomingStops
 };

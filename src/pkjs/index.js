@@ -9,7 +9,8 @@ var SETTINGS_KEY = 'pebbleTransit.settings';
 var CACHE_KEY = 'pebbleTransit.routeCache';
 var MODES_KEY = 'pebbleTransit.modes';
 var MODES_AT_KEY = 'pebbleTransit.modesAt';
-var MIN_REFRESH_MS = 60 * 1000;
+var LIVE_REFRESH_MS = 30 * 1000;
+var NEARBY_REFRESH_MS = 5 * 60 * 1000;
 var MODE_REFRESH_MS = 7 * 24 * 60 * 60 * 1000;
 
 var app = {
@@ -18,6 +19,8 @@ var app = {
   directions: {},
   lastCoords: null,
   lastRefreshAt: 0,
+  lastLiveRefreshAt: 0,
+  lastLiveRouteId: '',
   requestActive: false,
   detailActive: false,
   departureIndex: 0,
@@ -27,6 +30,7 @@ var app = {
   updatedAt: '--'
 };
 var tripCache = {};
+var liveRefreshTimer = null;
 
 function readJson(key, fallback) {
   try { return JSON.parse(localStorage.getItem(key) || '') || fallback; }
@@ -392,6 +396,8 @@ function loadNearby(coords) {
       sendError('No enabled transit lines found within ' + config.radius + ' m.');
       return;
     }
+    app.lastLiveRefreshAt = Date.now();
+    app.lastLiveRouteId = currentRoute().id;
     app.error = '';
     cacheRoutes();
     sendCurrent();
@@ -403,10 +409,83 @@ function loadNearby(coords) {
   });
 }
 
+function refreshSelectedLine(force) {
+  var route = currentRoute();
+  var direction = currentDirection(route);
+  if (!route || !direction || !direction.closestStopId || app.requestActive) {
+    sendCurrent();
+    return;
+  }
+  if (!force && app.lastLiveRouteId === route.id &&
+      Date.now() - app.lastLiveRefreshAt < LIVE_REFRESH_MS - 2000) {
+    sendCurrent();
+    return;
+  }
+
+  var stopIds = [direction.closestStopId];
+  if (app.detailActive) {
+    app.stops.forEach(function(stop) {
+      if (stop.id && stopIds.indexOf(stop.id) === -1) { stopIds.push(stop.id); }
+    });
+  }
+  var selected = selectedDeparture();
+  var selectedTripKey = selected && selected.tripSearchKey;
+  app.requestActive = true;
+  requestJson('/stop_departures', {
+    global_stop_ids: stopIds.join(','),
+    max_num_departures: app.detailActive ? 8 : 3,
+    should_update_realtime: true,
+    merge_platform_stops: true,
+    include_stops_and_shapes: false,
+    stop_detailed: false
+  }, function(body) {
+    app.requestActive = false;
+    var live = transit.liveDepartures(body, route.id, direction);
+    if (live.length) {
+      direction.departures = live;
+      if (app.detailActive && selectedTripKey) {
+        live.some(function(departure, index) {
+          if (departure.tripSearchKey === selectedTripKey) {
+            app.departureIndex = index;
+            return true;
+          }
+          return false;
+        });
+      }
+    }
+    var currentDeparture = selectedDeparture();
+    if (app.detailActive && app.stops.length) {
+      app.stops = transit.liveStopTimes(body, route.id, direction,
+        currentDeparture, app.stops);
+    }
+    app.lastLiveRefreshAt = Date.now();
+    app.lastLiveRouteId = route.id;
+    app.updatedAt = formatUpdated();
+    app.error = '';
+    cacheRoutes();
+    sendCurrent();
+    if (currentRoute() && currentRoute().id !== route.id) {
+      scheduleLiveRefresh(true);
+    }
+  }, function(message) {
+    app.requestActive = false;
+    app.error = message;
+    sendCurrent();
+  });
+}
+
+function scheduleLiveRefresh(force) {
+  if (liveRefreshTimer) { clearTimeout(liveRefreshTimer); }
+  liveRefreshTimer = setTimeout(function() {
+    liveRefreshTimer = null;
+    refreshSelectedLine(force);
+  }, 650);
+}
+
 function refresh(force) {
   if (app.requestActive) { return; }
-  if (!force && Date.now() - app.lastRefreshAt < MIN_REFRESH_MS) {
-    sendCurrent();
+  if (!force && app.routes.length && Date.now() - app.lastRefreshAt < NEARBY_REFRESH_MS) {
+    refreshSelectedLine(false);
     return;
   }
   if (!settings().apiKey) {
@@ -433,6 +512,7 @@ function changeLine(delta) {
   app.stops = [];
   app.error = '';
   sendCurrent();
+  scheduleLiveRefresh(true);
 }
 
 function changeDirection() {
@@ -444,6 +524,7 @@ function changeDirection() {
   app.stops = [];
   app.error = '';
   sendCurrent();
+  scheduleLiveRefresh(true);
 }
 
 function selectedDeparture() {
@@ -465,6 +546,7 @@ function loadTripDetails() {
     app.stops = transit.upcomingStops(cached.body, direction, departure, 5);
     app.detailLoading = false;
     sendCurrent();
+    scheduleLiveRefresh(true);
     return;
   }
   app.detailLoading = true;
@@ -478,6 +560,7 @@ function loadTripDetails() {
     app.detailLoading = false;
     app.error = '';
     sendCurrent();
+    scheduleLiveRefresh(true);
   }, function(message) {
     app.detailLoading = false;
     app.error = message;

@@ -46,7 +46,7 @@ The build script creates the ignored key module when it does not exist. To repla
 
 Because PebbleKit JS makes requests from the phone, a credential bundled into a `.pbw` can ultimately be extracted. Use this design for a personal build. A broadly distributed build should send requests through a small authenticated proxy with its own per-user controls.
 
-Transit’s free access is currently limited to five requests per minute and 1,500 per month. Pebble Transit uses one `/nearby_routes` request per refresh, a weekly `/available_networks` discovery request, and an on-demand `/trip_details` request when a departure detail is opened.
+Transit’s free access is currently limited to five requests per minute and 1,500 per month. Pebble Transit performs a broad `/nearby_routes` location scan every five minutes, then refreshes the selected line every 30 seconds through `/stop_departures`. On a trip detail page, that single live request includes the displayed downstream stops. Mode discovery is weekly and `/trip_details` is requested only when a departure detail is opened.
 
 ## Publish the settings page
 

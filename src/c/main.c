@@ -1,8 +1,9 @@
 #include <pebble.h>
 
 #define STOP_LIMIT 5
-#define REFRESH_INTERVAL_MS (60 * 1000)
-#define ANIMATION_INTERVAL_MS 100
+#define REFRESH_INTERVAL_MS (30 * 1000)
+#define ANIMATION_INTERVAL_MS 80
+#define SIGNAL_STEP_TICKS 7
 
 typedef struct {
   char route_name[16];
@@ -37,7 +38,9 @@ static AppTimer *s_animation_timer;
 static TransitData s_transit;
 static int s_detail_page;
 static int s_signal_frame;
+static int s_animation_tick;
 static int s_slide_offset;
+static int s_pending_slide_direction;
 
 static GColor color_from_hex(uint32_t rgb) {
 #ifdef PBL_COLOR
@@ -95,7 +98,9 @@ static void draw_live_signal(GContext *ctx, GPoint center, GColor color, int fra
   graphics_fill_circle(ctx, GPoint(center.x - 5, center.y + 5), 2);
   graphics_context_set_stroke_color(ctx, color);
   graphics_context_set_stroke_width(ctx, 2);
-  int visible = 1 + (frame % 3);
+  int phase = frame % 6;
+  int visible = phase < 4 ? phase : 6 - phase;
+  if (visible < 1) { visible = 1; }
   if (visible >= 1) {
     graphics_draw_arc(ctx, GRect(center.x - 10, center.y, 11, 11),
                       GOvalScaleModeFitCircle, DEG_TO_TRIGANGLE(270), DEG_TO_TRIGANGLE(360));
@@ -123,70 +128,98 @@ static void draw_spinner(GContext *ctx, GPoint center) {
 static void draw_vehicle_icon(GContext *ctx, GPoint p, int mode, GColor color) {
   graphics_context_set_stroke_color(ctx, color);
   graphics_context_set_fill_color(ctx, color);
-  graphics_context_set_stroke_width(ctx, 2);
+  graphics_context_set_stroke_width(ctx, 1);
 
   if (mode == 4) {
-    graphics_draw_line(ctx, GPoint(p.x - 12, p.y + 5), GPoint(p.x + 12, p.y + 5));
-    graphics_draw_line(ctx, GPoint(p.x - 12, p.y + 5), GPoint(p.x - 6, p.y + 11));
-    graphics_draw_line(ctx, GPoint(p.x - 6, p.y + 11), GPoint(p.x + 8, p.y + 11));
-    graphics_draw_line(ctx, GPoint(p.x + 8, p.y + 11), GPoint(p.x + 12, p.y + 5));
-    graphics_draw_rect(ctx, GRect(p.x - 6, p.y - 3, 13, 9));
-    graphics_draw_line(ctx, GPoint(p.x, p.y - 3), GPoint(p.x, p.y - 9));
+    // Ferry: stacked cabin, bow, and two small waves.
+    graphics_draw_rect(ctx, GRect(p.x - 8, p.y - 7, 16, 7));
+    graphics_draw_rect(ctx, GRect(p.x - 12, p.y, 24, 5));
+    graphics_draw_line(ctx, GPoint(p.x - 14, p.y + 5), GPoint(p.x - 8, p.y + 11));
+    graphics_draw_line(ctx, GPoint(p.x - 8, p.y + 11), GPoint(p.x + 8, p.y + 11));
+    graphics_draw_line(ctx, GPoint(p.x + 8, p.y + 11), GPoint(p.x + 14, p.y + 5));
+    graphics_draw_line(ctx, GPoint(p.x - 13, p.y + 14), GPoint(p.x - 7, p.y + 12));
+    graphics_draw_line(ctx, GPoint(p.x - 7, p.y + 12), GPoint(p.x, p.y + 14));
+    graphics_draw_line(ctx, GPoint(p.x, p.y + 14), GPoint(p.x + 7, p.y + 12));
+    graphics_draw_line(ctx, GPoint(p.x + 7, p.y + 12), GPoint(p.x + 13, p.y + 14));
+    graphics_draw_line(ctx, GPoint(p.x, p.y - 7), GPoint(p.x, p.y - 12));
     return;
   }
   if (mode == 5 || mode == 6 || mode == 7) {
-    graphics_draw_line(ctx, GPoint(p.x - 14, p.y - 10), GPoint(p.x + 14, p.y - 10));
-    graphics_draw_line(ctx, GPoint(p.x, p.y - 10), GPoint(p.x, p.y - 3));
-    graphics_draw_round_rect(ctx, GRect(p.x - 10, p.y - 3, 21, 18), 4);
-    graphics_draw_line(ctx, GPoint(p.x - 4, p.y + 1), GPoint(p.x - 4, p.y + 8));
-    graphics_draw_line(ctx, GPoint(p.x + 4, p.y + 1), GPoint(p.x + 4, p.y + 8));
+    // Cable car / gondola silhouette inspired by the supplied pixel references.
+    graphics_draw_line(ctx, GPoint(p.x - 15, p.y - 12), GPoint(p.x + 15, p.y - 12));
+    graphics_fill_rect(ctx, GRect(p.x - 2, p.y - 12, 5, 7), 0, GCornerNone);
+    graphics_draw_round_rect(ctx, GRect(p.x - 11, p.y - 5, 23, 19), 4);
+    graphics_draw_rect(ctx, GRect(p.x - 7, p.y - 1, 6, 8));
+    graphics_draw_rect(ctx, GRect(p.x + 2, p.y - 1, 6, 8));
+    graphics_fill_circle(ctx, GPoint(p.x - 6, p.y + 10), 2);
+    graphics_fill_circle(ctx, GPoint(p.x + 7, p.y + 10), 2);
     return;
   }
   if (mode == 1) {
-    graphics_draw_circle(ctx, p, 13);
-    draw_text(ctx, "M", GRect(p.x - 12, p.y - 11, 24, 22),
-              fonts_get_system_font(FONT_KEY_GOTHIC_18_BOLD), color, GTextAlignmentCenter);
+    // Metro train emerging from a tunnel.
+    graphics_draw_arc(ctx, GRect(p.x - 15, p.y - 14, 30, 30),
+                      GOvalScaleModeFitCircle, DEG_TO_TRIGANGLE(180), DEG_TO_TRIGANGLE(360));
+    graphics_draw_round_rect(ctx, GRect(p.x - 10, p.y - 7, 21, 20), 4);
+    graphics_draw_rect(ctx, GRect(p.x - 6, p.y - 3, 5, 7));
+    graphics_draw_rect(ctx, GRect(p.x + 2, p.y - 3, 5, 7));
+    graphics_fill_circle(ctx, GPoint(p.x - 6, p.y + 9), 2);
+    graphics_fill_circle(ctx, GPoint(p.x + 7, p.y + 9), 2);
+    graphics_draw_line(ctx, GPoint(p.x - 14, p.y + 15), GPoint(p.x + 14, p.y + 15));
     return;
   }
 
-  graphics_draw_round_rect(ctx, GRect(p.x - 10, p.y - 13, 21, 25), mode == 3 ? 4 : 8);
-  graphics_draw_line(ctx, GPoint(p.x - 6, p.y - 7), GPoint(p.x + 7, p.y - 7));
-  graphics_draw_line(ctx, GPoint(p.x - 6, p.y - 2), GPoint(p.x + 7, p.y - 2));
+  if (mode == 9) {
+    graphics_draw_line(ctx, GPoint(p.x - 15, p.y - 10), GPoint(p.x + 15, p.y - 10));
+    graphics_draw_round_rect(ctx, GRect(p.x - 12, p.y - 6, 25, 15), 6);
+    graphics_draw_rect(ctx, GRect(p.x - 8, p.y - 3, 6, 6));
+    graphics_draw_rect(ctx, GRect(p.x + 3, p.y - 3, 6, 6));
+    graphics_fill_rect(ctx, GRect(p.x - 2, p.y + 9, 5, 7), 0, GCornerNone);
+    return;
+  }
+
+  // Bus, rail, light rail, and trolleybus share a crisp front-facing body.
+  graphics_draw_round_rect(ctx, GRect(p.x - 11, p.y - 12, 23, 25), mode == 3 ? 3 : 6);
+  graphics_draw_rect(ctx, GRect(p.x - 7, p.y - 7, 6, 8));
+  graphics_draw_rect(ctx, GRect(p.x + 2, p.y - 7, 6, 8));
+  graphics_fill_rect(ctx, GRect(p.x - 7, p.y + 5, 4, 3), 0, GCornerNone);
+  graphics_fill_rect(ctx, GRect(p.x + 4, p.y + 5, 4, 3), 0, GCornerNone);
   graphics_fill_circle(ctx, GPoint(p.x - 6, p.y + 13), 2);
   graphics_fill_circle(ctx, GPoint(p.x + 7, p.y + 13), 2);
-  if (mode == 0) {
-    graphics_draw_line(ctx, GPoint(p.x - 5, p.y - 13), GPoint(p.x, p.y - 18));
-    graphics_draw_line(ctx, GPoint(p.x, p.y - 18), GPoint(p.x + 5, p.y - 13));
+  if (mode == 0 || mode == 8) {
+    graphics_draw_line(ctx, GPoint(p.x - 6, p.y - 12), GPoint(p.x, p.y - 17));
+    graphics_draw_line(ctx, GPoint(p.x, p.y - 17), GPoint(p.x + 6, p.y - 12));
+  }
+  if (mode == 2) {
+    graphics_draw_line(ctx, GPoint(p.x - 7, p.y + 16), GPoint(p.x - 2, p.y + 12));
+    graphics_draw_line(ctx, GPoint(p.x + 8, p.y + 16), GPoint(p.x + 3, p.y + 12));
   }
 }
 
-static void draw_top_bar(GContext *ctx, GRect bounds) {
-  graphics_context_set_fill_color(ctx, GColorBlack);
-  graphics_fill_rect(ctx, GRect(0, 0, bounds.size.w, 27), 0, GCornerNone);
+static void draw_home_status(GContext *ctx, GRect bounds, GColor ink) {
   char clock_text[8];
   format_watch_time(clock_text, sizeof(clock_text));
   draw_text(ctx, clock_text, GRect(0, 4, bounds.size.w, 18),
-            fonts_get_system_font(FONT_KEY_GOTHIC_14_BOLD), GColorWhite,
+            fonts_get_system_font(FONT_KEY_GOTHIC_14_BOLD), ink,
             GTextAlignmentCenter);
   if (s_transit.favorite) {
-    draw_text(ctx, "PIN", GRect(7, 5, 35, 17),
-              fonts_get_system_font(FONT_KEY_GOTHIC_14_BOLD), GColorMintGreen,
+    draw_text(ctx, "◆ PIN", GRect(7, 5, 43, 17),
+              fonts_get_system_font(FONT_KEY_GOTHIC_14_BOLD), ink,
               GTextAlignmentLeft);
-  } else {
-    draw_vehicle_icon(ctx, GPoint(17, 13), s_transit.mode_code, GColorWhite);
   }
   char position[24];
   snprintf(position, sizeof(position), "%d/%d", s_transit.line_index + 1,
            s_transit.line_count > 0 ? s_transit.line_count : 1);
   draw_text(ctx, position, GRect(bounds.size.w - 44, 5, 37, 17),
-            fonts_get_system_font(FONT_KEY_GOTHIC_14), GColorLightGray,
+            fonts_get_system_font(FONT_KEY_GOTHIC_14), ink,
             GTextAlignmentRight);
   if (s_transit.loading) { draw_spinner(ctx, GPoint(bounds.size.w - 10, 13)); }
+  graphics_context_set_stroke_color(ctx, ink);
+  graphics_draw_line(ctx, GPoint(9, 27), GPoint(bounds.size.w - 9, 27));
 }
 
 static void draw_direction_dots(GContext *ctx, int y, GColor color) {
   if (s_transit.direction_count < 2) { return; }
-  int start = 94 - ((s_transit.direction_count - 1) * 8);
+  int start = 94 + s_slide_offset - ((s_transit.direction_count - 1) * 8);
   for (int i = 0; i < s_transit.direction_count; i++) {
     graphics_context_set_fill_color(ctx, color);
     graphics_fill_circle(ctx, GPoint(start + i * 16, y),
@@ -204,64 +237,61 @@ static void draw_error(GContext *ctx, GRect bounds) {
 }
 
 static void draw_home(GContext *ctx, GRect bounds) {
-  graphics_context_set_fill_color(ctx, GColorWhite);
-  graphics_fill_rect(ctx, bounds, 0, GCornerNone);
-  draw_top_bar(ctx, bounds);
-
-  GRect card = GRect(7 + s_slide_offset, 34, bounds.size.w - 14, 165);
   GColor accent = route_color();
   GColor ink = route_text_color();
   graphics_context_set_fill_color(ctx, accent);
-  graphics_fill_rect(ctx, card, 11, GCornersAll);
+  graphics_fill_rect(ctx, bounds, 0, GCornerNone);
+  draw_home_status(ctx, bounds, ink);
+
+  int x = s_slide_offset;
 
   graphics_context_set_fill_color(ctx, ink);
-  graphics_fill_circle(ctx, GPoint(card.origin.x + 35, 67), 25);
+  graphics_fill_circle(ctx, GPoint(x + 38, 63), 25);
   draw_text(ctx, s_transit.route_name,
-            GRect(card.origin.x + 11, 49, 48, 35),
+            GRect(x + 14, 45, 48, 35),
             fonts_get_system_font(strlen(s_transit.route_name) > 4 ?
               FONT_KEY_GOTHIC_18_BOLD : FONT_KEY_BITHAM_30_BLACK),
             accent, GTextAlignmentCenter);
 
-  draw_text(ctx, s_transit.mode_name, GRect(card.origin.x + 69, 43, 97, 20),
+  draw_text(ctx, s_transit.mode_name, GRect(x + 72, 39, 117, 20),
             fonts_get_system_font(FONT_KEY_GOTHIC_14_BOLD), ink,
             GTextAlignmentLeft);
-  draw_text(ctx, s_transit.route_long_name, GRect(card.origin.x + 69, 61, 101, 35),
+  draw_text(ctx, s_transit.route_long_name, GRect(x + 72, 57, 117, 38),
             fonts_get_system_font(FONT_KEY_GOTHIC_18_BOLD), ink,
             GTextAlignmentLeft);
 
-  draw_text(ctx, "TO", GRect(card.origin.x + 12, 94, 22, 18),
+  draw_text(ctx, "TO", GRect(x + 13, 96, 22, 18),
             fonts_get_system_font(FONT_KEY_GOTHIC_14_BOLD), ink,
             GTextAlignmentLeft);
-  draw_text(ctx, s_transit.headsign, GRect(card.origin.x + 34, 92, card.size.w - 45, 22),
+  draw_text(ctx, s_transit.headsign, GRect(x + 35, 94, 153, 22),
             fonts_get_system_font(FONT_KEY_GOTHIC_18_BOLD), ink,
             GTextAlignmentLeft);
-  draw_direction_dots(ctx, 117, ink);
+  draw_direction_dots(ctx, 119, ink);
 
   graphics_context_set_stroke_color(ctx, ink);
   graphics_context_set_stroke_width(ctx, 1);
-  graphics_draw_line(ctx, GPoint(card.origin.x + 12, 125),
-                     GPoint(card.origin.x + card.size.w - 12, 125));
-  draw_text(ctx, s_transit.stop_name, GRect(card.origin.x + 12, 129, card.size.w - 24, 20),
+  graphics_draw_line(ctx, GPoint(x + 13, 128), GPoint(x + 187, 128));
+  draw_text(ctx, s_transit.stop_name, GRect(x + 13, 132, 174, 20),
             fonts_get_system_font(FONT_KEY_GOTHIC_14), ink,
             GTextAlignmentLeft);
 
   char eta[16];
   format_eta(s_transit.departures[0], eta, sizeof(eta));
-  draw_text(ctx, eta, GRect(card.origin.x + 11, 148, 133, 45),
+  draw_text(ctx, eta, GRect(x + 12, 151, 140, 45),
             fonts_get_system_font(FONT_KEY_BITHAM_42_BOLD), ink,
             GTextAlignmentLeft);
   if (s_transit.live[0]) {
-    draw_live_signal(ctx, GPoint(card.origin.x + card.size.w - 25, 168), ink, s_signal_frame);
+    draw_live_signal(ctx, GPoint(x + 174, 170), ink, s_signal_frame);
   } else {
-    draw_text(ctx, "SCHED", GRect(card.origin.x + card.size.w - 55, 164, 45, 18),
+    draw_text(ctx, "SCHED", GRect(x + 142, 166, 46, 18),
               fonts_get_system_font(FONT_KEY_GOTHIC_14_BOLD), ink,
               GTextAlignmentRight);
   }
 
   char footer[56];
   snprintf(footer, sizeof(footer), "Select direction  •  updated %s", s_transit.updated);
-  draw_text(ctx, footer, GRect(6, 203, bounds.size.w - 12, 20),
-            fonts_get_system_font(FONT_KEY_GOTHIC_14), GColorDarkGray,
+  draw_text(ctx, footer, GRect(x + 6, 204, bounds.size.w - 12, 20),
+            fonts_get_system_font(FONT_KEY_GOTHIC_14), ink,
             GTextAlignmentCenter);
   draw_error(ctx, bounds);
 }
@@ -271,15 +301,17 @@ static void draw_detail_header(GContext *ctx, GRect bounds, const char *label) {
   GColor ink = route_text_color();
   graphics_context_set_fill_color(ctx, accent);
   graphics_fill_rect(ctx, GRect(0, 0, bounds.size.w, 53), 0, GCornerNone);
-  draw_text(ctx, s_transit.route_name, GRect(8, 5, 65, 34),
-            fonts_get_system_font(FONT_KEY_BITHAM_30_BLACK), ink,
+  draw_vehicle_icon(ctx, GPoint(18, 27), s_transit.mode_code, ink);
+  draw_text(ctx, s_transit.route_name, GRect(37, 4, 58, 26),
+            fonts_get_system_font(strlen(s_transit.route_name) > 4 ?
+              FONT_KEY_GOTHIC_18_BOLD : FONT_KEY_GOTHIC_24_BOLD), ink,
             GTextAlignmentLeft);
-  draw_text(ctx, label, GRect(73, 5, 117, 18),
+  draw_text(ctx, label, GRect(96, 5, 94, 18),
             fonts_get_system_font(FONT_KEY_GOTHIC_14_BOLD), ink,
             GTextAlignmentRight);
-  draw_text(ctx, s_transit.headsign, GRect(72, 22, 118, 26),
-            fonts_get_system_font(FONT_KEY_GOTHIC_18_BOLD), ink,
-            GTextAlignmentRight);
+  draw_text(ctx, s_transit.headsign, GRect(40, 28, 150, 20),
+            fonts_get_system_font(FONT_KEY_GOTHIC_14_BOLD), ink,
+            GTextAlignmentLeft);
 }
 
 static void draw_page_rail(GContext *ctx, int active) {
@@ -384,9 +416,20 @@ static void canvas_update(Layer *layer, GContext *ctx) {
 }
 
 static void animation_timer_callback(void *context) {
-  s_signal_frame = (s_signal_frame + 1) % 24;
-  if (s_slide_offset > 0) { s_slide_offset -= 4; if (s_slide_offset < 0) s_slide_offset = 0; }
-  if (s_slide_offset < 0) { s_slide_offset += 4; if (s_slide_offset > 0) s_slide_offset = 0; }
+  s_animation_tick++;
+  if (s_animation_tick % SIGNAL_STEP_TICKS == 0) {
+    s_signal_frame = (s_signal_frame + 1) % 24;
+  }
+  int slide_step = abs(s_slide_offset) / 3;
+  if (slide_step < 2) { slide_step = 2; }
+  if (s_slide_offset > 0) {
+    s_slide_offset -= slide_step;
+    if (s_slide_offset < 0) { s_slide_offset = 0; }
+  }
+  if (s_slide_offset < 0) {
+    s_slide_offset += slide_step;
+    if (s_slide_offset > 0) { s_slide_offset = 0; }
+  }
   if (s_canvas) { layer_mark_dirty(s_canvas); }
   s_animation_timer = app_timer_register(ANIMATION_INTERVAL_MS, animation_timer_callback, NULL);
 }
@@ -400,7 +443,8 @@ static void send_request(uint32_t key, int8_t value) {
 }
 
 static void change_line(int delta) {
-  s_slide_offset = delta > 0 ? 18 : -18;
+  s_pending_slide_direction = delta;
+  s_slide_offset = delta > 0 ? -12 : 12;
   s_transit.loading = true;
   s_transit.error[0] = '\0';
   send_request(MESSAGE_KEY_REQUEST_LINE_DELTA, delta);
@@ -427,7 +471,7 @@ static void select_click(ClickRecognizerRef recognizer, void *context) {
   if (s_transit.detail_active) {
     send_request(MESSAGE_KEY_REQUEST_DEPARTURE, 1);
   } else {
-    s_slide_offset = 10;
+    s_slide_offset = 14;
     send_request(MESSAGE_KEY_REQUEST_DIRECTION, 1);
   }
   layer_mark_dirty(s_canvas);
@@ -474,7 +518,7 @@ static void click_config(void *context) {
 }
 
 static void refresh_timer_callback(void *context) {
-  if (!s_transit.detail_active) { send_request(MESSAGE_KEY_REQUEST_REFRESH, 2); }
+  send_request(MESSAGE_KEY_REQUEST_REFRESH, 2);
   s_refresh_timer = app_timer_register(REFRESH_INTERVAL_MS, refresh_timer_callback, NULL);
 }
 
@@ -495,6 +539,7 @@ static int32_t tuple_int(DictionaryIterator *iter, uint32_t key, int32_t fallbac
 }
 
 static void inbox_received(DictionaryIterator *iter, void *context) {
+  int previous_line_index = s_transit.line_index;
   copy_tuple(iter, MESSAGE_KEY_ROUTE_NAME, s_transit.route_name, sizeof(s_transit.route_name));
   copy_tuple(iter, MESSAGE_KEY_ROUTE_LONG_NAME, s_transit.route_long_name, sizeof(s_transit.route_long_name));
   copy_tuple(iter, MESSAGE_KEY_HEADSIGN, s_transit.headsign, sizeof(s_transit.headsign));
@@ -504,6 +549,10 @@ static void inbox_received(DictionaryIterator *iter, void *context) {
   copy_tuple(iter, MESSAGE_KEY_ERROR_MESSAGE, s_transit.error, sizeof(s_transit.error));
 
   s_transit.line_index = tuple_int(iter, MESSAGE_KEY_LINE_INDEX, s_transit.line_index);
+  if (s_transit.line_index != previous_line_index && s_pending_slide_direction != 0) {
+    s_slide_offset = s_pending_slide_direction > 0 ? 42 : -42;
+    s_pending_slide_direction = 0;
+  }
   s_transit.line_count = tuple_int(iter, MESSAGE_KEY_LINE_COUNT, s_transit.line_count);
   s_transit.mode_code = tuple_int(iter, MESSAGE_KEY_MODE_CODE, s_transit.mode_code);
   s_transit.route_color = (uint32_t)tuple_int(iter, MESSAGE_KEY_ROUTE_COLOR, s_transit.route_color);

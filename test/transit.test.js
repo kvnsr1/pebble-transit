@@ -80,6 +80,31 @@ var body = {nearby_routes: [
   assert.strictEqual(stops.length, 2);
   assert.strictEqual(stops[0].time, 2000);
   assert.strictEqual(stops[1].time, 2120);
+  assert.strictEqual(stops[0].id, 'BUS:10:stop');
+})();
+
+(function refreshesSelectedLineAndTripStopsFromLiveStopData() {
+  var routes = transit.normalizeRoutes(body, {});
+  var direction = routes[0].directions[0];
+  var departure = direction.departures[0];
+  var stops = [{id: 'BUS:10:stop', name: 'Main at First', time: 2000,
+    scheduledTime: 1970, realTime: false}];
+  var liveBody = {route_departures: [{
+    global_route_id: 'BUS:10',
+    global_stop_id: 'BUS:10:stop',
+    merged_itineraries: [{
+      direction_id: 0,
+      closest_stop: {global_stop_id: 'BUS:10:stop', stop_name: 'Main at First'},
+      itineraries: [{canonical_itinerary: true, direction_headsign: 'Downtown'}],
+      schedule_items: [{departure_time: 2045, scheduled_departure_time: 1970,
+        is_real_time: true, trip_search_key: 'BUS:10:trip1'}]
+    }]
+  }]};
+  var liveDepartures = transit.liveDepartures(liveBody, 'BUS:10', direction);
+  assert.strictEqual(liveDepartures[0].departureTime, 2045);
+  var liveStops = transit.liveStopTimes(liveBody, 'BUS:10', direction, departure, stops);
+  assert.strictEqual(liveStops[0].time, 2045);
+  assert.strictEqual(liveStops[0].realTime, true);
 })();
 
 (function buildsModeCatalogFromAvailableNetworks() {
