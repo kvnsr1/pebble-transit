@@ -1,7 +1,8 @@
 #include <pebble.h>
 
 #define STOP_LIMIT 5
-#define REFRESH_INTERVAL_MS (30 * 1000)
+#define HOME_ROWS 3
+#define REFRESH_INTERVAL_MS (60 * 1000)
 #define ANIMATION_INTERVAL_MS 80
 #define SIGNAL_STEP_TICKS 7
 
@@ -14,8 +15,14 @@ typedef struct {
   char updated[14];
   char error[80];
   char stop_names[STOP_LIMIT][38];
+  char home_route_names[HOME_ROWS][16];
+  char home_headsigns[HOME_ROWS][40];
+  char home_stop_names[HOME_ROWS][48];
   int32_t departures[3];
   int32_t stop_times[STOP_LIMIT];
+  int32_t home_departures[HOME_ROWS];
+  uint32_t home_colors[HOME_ROWS];
+  uint32_t home_text_colors[HOME_ROWS];
   uint32_t route_color;
   uint32_t text_color;
   int line_index;
@@ -25,7 +32,13 @@ typedef struct {
   int direction_count;
   int departure_index;
   int stop_count;
+  int home_count;
+  int home_selected;
+  int page_index;
+  int page_count;
   bool live[3];
+  bool home_live[HOME_ROWS];
+  bool home_favorite[HOME_ROWS];
   bool favorite;
   bool loading;
   bool detail_active;
@@ -59,15 +72,6 @@ static void draw_text(GContext *ctx, const char *text, GRect rect, GFont font,
   graphics_context_set_text_color(ctx, color);
   graphics_draw_text(ctx, text, font, rect, GTextOverflowModeTrailingEllipsis,
                      alignment, NULL);
-}
-
-static void format_watch_time(char *buffer, size_t size) {
-  time_t now = time(NULL);
-  struct tm *local = localtime(&now);
-  strftime(buffer, size, clock_is_24h_style() ? "%H:%M" : "%I:%M", local);
-  if (!clock_is_24h_style() && buffer[0] == '0') {
-    memmove(buffer, buffer + 1, strlen(buffer));
-  }
 }
 
 static void format_eta(int32_t epoch, char *buffer, size_t size) {
@@ -195,38 +199,6 @@ static void draw_vehicle_icon(GContext *ctx, GPoint p, int mode, GColor color) {
   }
 }
 
-static void draw_home_status(GContext *ctx, GRect bounds, GColor ink) {
-  char clock_text[8];
-  format_watch_time(clock_text, sizeof(clock_text));
-  draw_text(ctx, clock_text, GRect(0, 4, bounds.size.w, 18),
-            fonts_get_system_font(FONT_KEY_GOTHIC_14_BOLD), ink,
-            GTextAlignmentCenter);
-  if (s_transit.favorite) {
-    draw_text(ctx, "◆ PIN", GRect(7, 5, 43, 17),
-              fonts_get_system_font(FONT_KEY_GOTHIC_14_BOLD), ink,
-              GTextAlignmentLeft);
-  }
-  char position[24];
-  snprintf(position, sizeof(position), "%d/%d", s_transit.line_index + 1,
-           s_transit.line_count > 0 ? s_transit.line_count : 1);
-  draw_text(ctx, position, GRect(bounds.size.w - 44, 5, 37, 17),
-            fonts_get_system_font(FONT_KEY_GOTHIC_14), ink,
-            GTextAlignmentRight);
-  if (s_transit.loading) { draw_spinner(ctx, GPoint(bounds.size.w - 10, 13)); }
-  graphics_context_set_stroke_color(ctx, ink);
-  graphics_draw_line(ctx, GPoint(9, 27), GPoint(bounds.size.w - 9, 27));
-}
-
-static void draw_direction_dots(GContext *ctx, int y, GColor color) {
-  if (s_transit.direction_count < 2) { return; }
-  int start = 94 + s_slide_offset - ((s_transit.direction_count - 1) * 8);
-  for (int i = 0; i < s_transit.direction_count; i++) {
-    graphics_context_set_fill_color(ctx, color);
-    graphics_fill_circle(ctx, GPoint(start + i * 16, y),
-                         i == s_transit.direction_index ? 3 : 1);
-  }
-}
-
 static void draw_error(GContext *ctx, GRect bounds) {
   if (!s_transit.error[0]) { return; }
   graphics_context_set_fill_color(ctx, GColorBulgarianRose);
@@ -237,62 +209,67 @@ static void draw_error(GContext *ctx, GRect bounds) {
 }
 
 static void draw_home(GContext *ctx, GRect bounds) {
-  GColor accent = route_color();
-  GColor ink = route_text_color();
-  graphics_context_set_fill_color(ctx, accent);
+  graphics_context_set_fill_color(ctx, GColorBlack);
   graphics_fill_rect(ctx, bounds, 0, GCornerNone);
-  draw_home_status(ctx, bounds, ink);
+  for (int i = 0; i < s_transit.home_count && i < HOME_ROWS; i++) {
+    int y = i * 76 + s_slide_offset;
+    GColor accent = color_from_hex(s_transit.home_colors[i]);
+    GColor ink = color_from_hex(s_transit.home_text_colors[i]);
+    graphics_context_set_fill_color(ctx, accent);
+    graphics_fill_rect(ctx, GRect(0, y, bounds.size.w, 76), 0, GCornerNone);
 
-  int x = s_slide_offset;
+    graphics_context_set_fill_color(ctx, ink);
+    graphics_fill_circle(ctx, GPoint(23, y + 28), 18);
+    draw_text(ctx, s_transit.home_route_names[i], GRect(7, y + 14, 33, 28),
+              fonts_get_system_font(strlen(s_transit.home_route_names[i]) > 3 ?
+                FONT_KEY_GOTHIC_14_BOLD : FONT_KEY_GOTHIC_24_BOLD),
+              accent, GTextAlignmentCenter);
 
-  graphics_context_set_fill_color(ctx, ink);
-  graphics_fill_circle(ctx, GPoint(x + 38, 63), 25);
-  draw_text(ctx, s_transit.route_name,
-            GRect(x + 14, 45, 48, 35),
-            fonts_get_system_font(strlen(s_transit.route_name) > 4 ?
-              FONT_KEY_GOTHIC_18_BOLD : FONT_KEY_BITHAM_30_BLACK),
-            accent, GTextAlignmentCenter);
+    draw_text(ctx, s_transit.home_headsigns[i], GRect(47, y + 7, 105, 25),
+              fonts_get_system_font(FONT_KEY_GOTHIC_18_BOLD), ink,
+              GTextAlignmentLeft);
+    draw_text(ctx, s_transit.home_stop_names[i], GRect(47, y + 31, 108, 22),
+              fonts_get_system_font(FONT_KEY_GOTHIC_14), ink,
+              GTextAlignmentLeft);
 
-  draw_text(ctx, s_transit.mode_name, GRect(x + 72, 39, 117, 20),
-            fonts_get_system_font(FONT_KEY_GOTHIC_14_BOLD), ink,
-            GTextAlignmentLeft);
-  draw_text(ctx, s_transit.route_long_name, GRect(x + 72, 57, 117, 38),
-            fonts_get_system_font(FONT_KEY_GOTHIC_18_BOLD), ink,
-            GTextAlignmentLeft);
-
-  draw_text(ctx, "TO", GRect(x + 13, 96, 22, 18),
-            fonts_get_system_font(FONT_KEY_GOTHIC_14_BOLD), ink,
-            GTextAlignmentLeft);
-  draw_text(ctx, s_transit.headsign, GRect(x + 35, 94, 153, 22),
-            fonts_get_system_font(FONT_KEY_GOTHIC_18_BOLD), ink,
-            GTextAlignmentLeft);
-  draw_direction_dots(ctx, 119, ink);
-
-  graphics_context_set_stroke_color(ctx, ink);
-  graphics_context_set_stroke_width(ctx, 1);
-  graphics_draw_line(ctx, GPoint(x + 13, 128), GPoint(x + 187, 128));
-  draw_text(ctx, s_transit.stop_name, GRect(x + 13, 132, 174, 20),
-            fonts_get_system_font(FONT_KEY_GOTHIC_14), ink,
-            GTextAlignmentLeft);
-
-  char eta[16];
-  format_eta(s_transit.departures[0], eta, sizeof(eta));
-  draw_text(ctx, eta, GRect(x + 12, 151, 140, 45),
-            fonts_get_system_font(FONT_KEY_BITHAM_42_BOLD), ink,
-            GTextAlignmentLeft);
-  if (s_transit.live[0]) {
-    draw_live_signal(ctx, GPoint(x + 174, 170), ink, s_signal_frame);
-  } else {
-    draw_text(ctx, "SCHED", GRect(x + 142, 166, 46, 18),
-              fonts_get_system_font(FONT_KEY_GOTHIC_14_BOLD), ink,
+    char eta[14];
+    format_eta(s_transit.home_departures[i], eta, sizeof(eta));
+    draw_text(ctx, eta, GRect(151, y + 10, 43, 30),
+              fonts_get_system_font(FONT_KEY_GOTHIC_24_BOLD), ink,
               GTextAlignmentRight);
+    if (s_transit.home_live[i]) {
+      draw_live_signal(ctx, GPoint(184, y + 48), ink, s_signal_frame + i);
+    } else {
+      draw_text(ctx, "S", GRect(174, y + 42, 18, 18),
+                fonts_get_system_font(FONT_KEY_GOTHIC_14_BOLD), ink,
+                GTextAlignmentCenter);
+    }
+    if (s_transit.home_favorite[i]) {
+      draw_text(ctx, "◆", GRect(4, y + 2, 14, 16),
+                fonts_get_system_font(FONT_KEY_GOTHIC_14_BOLD), ink,
+                GTextAlignmentLeft);
+    }
+
+    graphics_context_set_stroke_color(ctx, ink);
+    graphics_context_set_stroke_width(ctx, i == s_transit.home_selected ? 3 : 1);
+    graphics_draw_rect(ctx, GRect(i == s_transit.home_selected ? 1 : 0,
+                                  y + (i == s_transit.home_selected ? 1 : 0),
+                                  bounds.size.w - (i == s_transit.home_selected ? 2 : 1),
+                                  76 - (i == s_transit.home_selected ? 2 : 1)));
+    if (i == s_transit.home_selected) {
+      graphics_fill_circle(ctx, GPoint(44, y + 62), 3);
+    }
   }
 
-  char footer[56];
-  snprintf(footer, sizeof(footer), "Select direction  •  updated %s", s_transit.updated);
-  draw_text(ctx, footer, GRect(x + 6, 204, bounds.size.w - 12, 20),
-            fonts_get_system_font(FONT_KEY_GOTHIC_14), ink,
-            GTextAlignmentCenter);
+  char page[24];
+  snprintf(page, sizeof(page), "%d/%d", s_transit.page_index + 1,
+           s_transit.page_count > 0 ? s_transit.page_count : 1);
+  graphics_context_set_fill_color(ctx, GColorBlack);
+  graphics_fill_rect(ctx, GRect(158, 209, 36, 17), 4, GCornersAll);
+  draw_text(ctx, page, GRect(159, 207, 33, 18),
+            fonts_get_system_font(FONT_KEY_GOTHIC_14_BOLD), GColorWhite,
+            GTextAlignmentRight);
+  if (s_transit.loading) { draw_spinner(ctx, GPoint(190, 9)); }
   draw_error(ctx, bounds);
 }
 
@@ -442,12 +419,11 @@ static void send_request(uint32_t key, int8_t value) {
   }
 }
 
-static void change_line(int delta) {
+static void change_page(int delta) {
   s_pending_slide_direction = delta;
-  s_slide_offset = delta > 0 ? -12 : 12;
-  s_transit.loading = true;
+  s_slide_offset = delta > 0 ? -18 : 18;
   s_transit.error[0] = '\0';
-  send_request(MESSAGE_KEY_REQUEST_LINE_DELTA, delta);
+  send_request(MESSAGE_KEY_REQUEST_PAGE_DELTA, delta);
   layer_mark_dirty(s_canvas);
 }
 
@@ -455,24 +431,23 @@ static void up_click(ClickRecognizerRef recognizer, void *context) {
   if (s_transit.detail_active) {
     s_detail_page = (s_detail_page + 1) % 2;
     layer_mark_dirty(s_canvas);
-  } else { change_line(-1); }
+  } else { change_page(-1); }
 }
 
 static void down_click(ClickRecognizerRef recognizer, void *context) {
   if (s_transit.detail_active) {
     s_detail_page = (s_detail_page + 1) % 2;
     layer_mark_dirty(s_canvas);
-  } else { change_line(1); }
+  } else { change_page(1); }
 }
 
 static void select_click(ClickRecognizerRef recognizer, void *context) {
-  s_transit.loading = true;
   s_transit.error[0] = '\0';
   if (s_transit.detail_active) {
+    s_transit.loading = true;
     send_request(MESSAGE_KEY_REQUEST_DEPARTURE, 1);
   } else {
-    s_slide_offset = 14;
-    send_request(MESSAGE_KEY_REQUEST_DIRECTION, 1);
+    send_request(MESSAGE_KEY_REQUEST_ROW_DELTA, 1);
   }
   layer_mark_dirty(s_canvas);
 }
@@ -492,7 +467,18 @@ static void select_long_click(ClickRecognizerRef recognizer, void *context) {
 static void up_long_click(ClickRecognizerRef recognizer, void *context) {
   if (s_transit.detail_active) { return; }
   s_transit.favorite = !s_transit.favorite;
+  if (s_transit.home_selected >= 0 && s_transit.home_selected < HOME_ROWS) {
+    s_transit.home_favorite[s_transit.home_selected] = s_transit.favorite;
+  }
   send_request(MESSAGE_KEY_REQUEST_TOGGLE_FAVORITE, 1);
+  vibes_short_pulse();
+  layer_mark_dirty(s_canvas);
+}
+
+static void down_long_click(ClickRecognizerRef recognizer, void *context) {
+  if (s_transit.detail_active) { return; }
+  s_transit.error[0] = '\0';
+  send_request(MESSAGE_KEY_REQUEST_DIRECTION, 1);
   vibes_short_pulse();
   layer_mark_dirty(s_canvas);
 }
@@ -514,6 +500,7 @@ static void click_config(void *context) {
   window_single_click_subscribe(BUTTON_ID_SELECT, select_click);
   window_long_click_subscribe(BUTTON_ID_SELECT, 650, select_long_click, NULL);
   window_single_click_subscribe(BUTTON_ID_DOWN, down_click);
+  window_long_click_subscribe(BUTTON_ID_DOWN, 650, down_long_click, NULL);
   window_single_click_subscribe(BUTTON_ID_BACK, back_click);
 }
 
@@ -539,7 +526,7 @@ static int32_t tuple_int(DictionaryIterator *iter, uint32_t key, int32_t fallbac
 }
 
 static void inbox_received(DictionaryIterator *iter, void *context) {
-  int previous_line_index = s_transit.line_index;
+  int previous_page_index = s_transit.page_index;
   copy_tuple(iter, MESSAGE_KEY_ROUTE_NAME, s_transit.route_name, sizeof(s_transit.route_name));
   copy_tuple(iter, MESSAGE_KEY_ROUTE_LONG_NAME, s_transit.route_long_name, sizeof(s_transit.route_long_name));
   copy_tuple(iter, MESSAGE_KEY_HEADSIGN, s_transit.headsign, sizeof(s_transit.headsign));
@@ -549,10 +536,6 @@ static void inbox_received(DictionaryIterator *iter, void *context) {
   copy_tuple(iter, MESSAGE_KEY_ERROR_MESSAGE, s_transit.error, sizeof(s_transit.error));
 
   s_transit.line_index = tuple_int(iter, MESSAGE_KEY_LINE_INDEX, s_transit.line_index);
-  if (s_transit.line_index != previous_line_index && s_pending_slide_direction != 0) {
-    s_slide_offset = s_pending_slide_direction > 0 ? 42 : -42;
-    s_pending_slide_direction = 0;
-  }
   s_transit.line_count = tuple_int(iter, MESSAGE_KEY_LINE_COUNT, s_transit.line_count);
   s_transit.mode_code = tuple_int(iter, MESSAGE_KEY_MODE_CODE, s_transit.mode_code);
   s_transit.route_color = (uint32_t)tuple_int(iter, MESSAGE_KEY_ROUTE_COLOR, s_transit.route_color);
@@ -570,11 +553,24 @@ static void inbox_received(DictionaryIterator *iter, void *context) {
   s_transit.detail_active = tuple_int(iter, MESSAGE_KEY_DETAIL_ACTIVE, s_transit.detail_active) != 0;
   s_transit.departure_index = tuple_int(iter, MESSAGE_KEY_DEPARTURE_INDEX, s_transit.departure_index);
   s_transit.stop_count = tuple_int(iter, MESSAGE_KEY_STOP_COUNT, s_transit.stop_count);
+  s_transit.home_count = tuple_int(iter, MESSAGE_KEY_HOME_COUNT, s_transit.home_count);
+  s_transit.home_selected = tuple_int(iter, MESSAGE_KEY_HOME_SELECTED, s_transit.home_selected);
+  s_transit.page_index = tuple_int(iter, MESSAGE_KEY_PAGE_INDEX, s_transit.page_index);
+  s_transit.page_count = tuple_int(iter, MESSAGE_KEY_PAGE_COUNT, s_transit.page_count);
+  if (s_transit.page_index != previous_page_index && s_pending_slide_direction != 0) {
+    s_slide_offset = s_pending_slide_direction > 0 ? 76 : -76;
+    s_pending_slide_direction = 0;
+  }
   if (s_transit.departure_index < 0 || s_transit.departure_index > 2) {
     s_transit.departure_index = 0;
   }
   if (s_transit.stop_count < 0) { s_transit.stop_count = 0; }
   if (s_transit.stop_count > STOP_LIMIT) { s_transit.stop_count = STOP_LIMIT; }
+  if (s_transit.home_count < 0) { s_transit.home_count = 0; }
+  if (s_transit.home_count > HOME_ROWS) { s_transit.home_count = HOME_ROWS; }
+  if (s_transit.home_selected < 0 || s_transit.home_selected >= s_transit.home_count) {
+    s_transit.home_selected = 0;
+  }
 
   const uint32_t name_keys[STOP_LIMIT] = {
     MESSAGE_KEY_STOP_1_NAME, MESSAGE_KEY_STOP_2_NAME, MESSAGE_KEY_STOP_3_NAME,
@@ -587,6 +583,51 @@ static void inbox_received(DictionaryIterator *iter, void *context) {
   for (int i = 0; i < STOP_LIMIT; i++) {
     copy_tuple(iter, name_keys[i], s_transit.stop_names[i], sizeof(s_transit.stop_names[i]));
     s_transit.stop_times[i] = tuple_int(iter, time_keys[i], s_transit.stop_times[i]);
+  }
+
+  const uint32_t home_route_keys[HOME_ROWS] = {
+    MESSAGE_KEY_HOME_1_ROUTE, MESSAGE_KEY_HOME_2_ROUTE, MESSAGE_KEY_HOME_3_ROUTE
+  };
+  const uint32_t home_headsign_keys[HOME_ROWS] = {
+    MESSAGE_KEY_HOME_1_HEADSIGN, MESSAGE_KEY_HOME_2_HEADSIGN, MESSAGE_KEY_HOME_3_HEADSIGN
+  };
+  const uint32_t home_stop_keys[HOME_ROWS] = {
+    MESSAGE_KEY_HOME_1_STOP, MESSAGE_KEY_HOME_2_STOP, MESSAGE_KEY_HOME_3_STOP
+  };
+  const uint32_t home_eta_keys[HOME_ROWS] = {
+    MESSAGE_KEY_HOME_1_ETA, MESSAGE_KEY_HOME_2_ETA, MESSAGE_KEY_HOME_3_ETA
+  };
+  const uint32_t home_live_keys[HOME_ROWS] = {
+    MESSAGE_KEY_HOME_1_LIVE, MESSAGE_KEY_HOME_2_LIVE, MESSAGE_KEY_HOME_3_LIVE
+  };
+  const uint32_t home_color_keys[HOME_ROWS] = {
+    MESSAGE_KEY_HOME_1_COLOR, MESSAGE_KEY_HOME_2_COLOR, MESSAGE_KEY_HOME_3_COLOR
+  };
+  const uint32_t home_text_color_keys[HOME_ROWS] = {
+    MESSAGE_KEY_HOME_1_TEXT_COLOR, MESSAGE_KEY_HOME_2_TEXT_COLOR,
+    MESSAGE_KEY_HOME_3_TEXT_COLOR
+  };
+  const uint32_t home_favorite_keys[HOME_ROWS] = {
+    MESSAGE_KEY_HOME_1_FAVORITE, MESSAGE_KEY_HOME_2_FAVORITE,
+    MESSAGE_KEY_HOME_3_FAVORITE
+  };
+  for (int i = 0; i < HOME_ROWS; i++) {
+    copy_tuple(iter, home_route_keys[i], s_transit.home_route_names[i],
+               sizeof(s_transit.home_route_names[i]));
+    copy_tuple(iter, home_headsign_keys[i], s_transit.home_headsigns[i],
+               sizeof(s_transit.home_headsigns[i]));
+    copy_tuple(iter, home_stop_keys[i], s_transit.home_stop_names[i],
+               sizeof(s_transit.home_stop_names[i]));
+    s_transit.home_departures[i] = tuple_int(iter, home_eta_keys[i],
+                                             s_transit.home_departures[i]);
+    s_transit.home_live[i] = tuple_int(iter, home_live_keys[i],
+                                       s_transit.home_live[i]) != 0;
+    s_transit.home_colors[i] = (uint32_t)tuple_int(iter, home_color_keys[i],
+                                                   s_transit.home_colors[i]);
+    s_transit.home_text_colors[i] = (uint32_t)tuple_int(iter,
+      home_text_color_keys[i], s_transit.home_text_colors[i]);
+    s_transit.home_favorite[i] = tuple_int(iter, home_favorite_keys[i],
+                                            s_transit.home_favorite[i]) != 0;
   }
   layer_mark_dirty(s_canvas);
 }
@@ -614,6 +655,14 @@ static void init(void) {
   s_transit.route_color = 0x29A66A;
   s_transit.text_color = 0xFFFFFF;
   s_transit.line_count = 1;
+  s_transit.home_count = 1;
+  s_transit.page_count = 1;
+  s_transit.home_colors[0] = s_transit.route_color;
+  s_transit.home_text_colors[0] = s_transit.text_color;
+  snprintf(s_transit.home_route_names[0], sizeof(s_transit.home_route_names[0]), "T");
+  snprintf(s_transit.home_headsigns[0], sizeof(s_transit.home_headsigns[0]), "Nearby lines");
+  snprintf(s_transit.home_stop_names[0], sizeof(s_transit.home_stop_names[0]),
+           "Finding your location");
   s_transit.loading = true;
 
   s_window = window_create();

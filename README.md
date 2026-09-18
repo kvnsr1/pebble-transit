@@ -1,6 +1,6 @@
 # Pebble Transit
 
-Pebble Transit is a Pebble Time 2 companion for nearby public transportation. It mirrors the glanceable part of Transit’s Nearby screen: route branding, the nearest stop, direction, and a live departure countdown. A detail view shows the next three departures and the upcoming stops for the selected trip.
+Pebble Transit is a Pebble Time 2 companion for nearby public transportation. It mirrors the glanceable part of Transit’s Nearby screen with three route-colored nearby lines per page, nearest stops, directions, and live departure countdowns. A detail view shows the next three departures and the upcoming stops for the selected trip.
 
 ## Architecture
 
@@ -46,7 +46,7 @@ The build script creates the ignored key module when it does not exist. To repla
 
 Because PebbleKit JS makes requests from the phone, a credential bundled into a `.pbw` can ultimately be extracted. Use this design for a personal build. A broadly distributed build should send requests through a small authenticated proxy with its own per-user controls.
 
-Transit’s free access is currently limited to five requests per minute and 1,500 per month. Pebble Transit performs a broad `/nearby_routes` location scan every five minutes, then refreshes the selected line every 30 seconds through `/stop_departures`. On a trip detail page, that single live request includes the displayed downstream stops. Mode discovery is weekly and `/trip_details` is requested only when a departure detail is opened.
+Transit’s free access is currently limited to five requests per minute and 1,500 per month. On the homepage, Pebble Transit refreshes all nearby lines together with one `/nearby_routes` request per minute. Paging and changing the highlighted line use that cached response and make no requests. In a detail view, the selected line refreshes once per minute through `/stop_departures`; that single live request also includes the displayed downstream stops. Mode discovery is weekly and `/trip_details` is requested only when a departure’s stop detail is needed.
 
 ## Publish the settings page
 
@@ -60,12 +60,13 @@ GitHub Pages publishes the settings page from this repository’s `main` branch.
 
 ## Controls
 
-### Nearby line
+### Nearby lines
 
-- **Up / Down:** move through nearby lines.
-- **Select:** switch direction.
-- **Hold Select:** open the selected line’s next-three-departures view.
-- **Hold Up:** pin or unpin the selected line. Nearby pinned lines sort first after the next refresh.
+- **Up / Down:** move through pages of three nearby lines.
+- **Select:** move the highlight among the three visible lines.
+- **Hold Select:** open the highlighted line’s next-three-departures view.
+- **Hold Up:** pin or unpin the highlighted line. Nearby pinned lines sort first after the next refresh.
+- **Hold Down:** switch the highlighted line’s direction using the already-loaded nearby data.
 - **Back:** exit.
 
 ### Line details
@@ -74,7 +75,7 @@ GitHub Pages publishes the settings page from this repository’s `main` branch.
 - **Up / Down:** toggle between the departure board and upcoming stops for the highlighted trip.
 - **Back:** return to nearby lines.
 
-Stop ETAs are based on the selected trip’s stop schedule and shifted by the selected departure’s current real-time offset when Transit marks that departure as live.
+Stop ETAs use Transit’s live stop-departure data when available, with the selected trip’s real-time offset as a fallback.
 
 ## Configuration
 

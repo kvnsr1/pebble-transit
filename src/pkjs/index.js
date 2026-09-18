@@ -9,13 +9,13 @@ var SETTINGS_KEY = 'pebbleTransit.settings';
 var CACHE_KEY = 'pebbleTransit.routeCache';
 var MODES_KEY = 'pebbleTransit.modes';
 var MODES_AT_KEY = 'pebbleTransit.modesAt';
-var LIVE_REFRESH_MS = 30 * 1000;
-var NEARBY_REFRESH_MS = 5 * 60 * 1000;
+var REFRESH_MS = 60 * 1000;
 var MODE_REFRESH_MS = 7 * 24 * 60 * 60 * 1000;
 
 var app = {
   routes: [],
   activeIndex: 0,
+  pageStart: 0,
   directions: {},
   lastCoords: null,
   lastRefreshAt: 0,
@@ -248,6 +248,29 @@ function stopPayload(payload) {
   return payload;
 }
 
+function homePayload(payload) {
+  var pageCount = Math.max(1, Math.ceil(app.routes.length / 3));
+  payload.HOME_COUNT = Math.min(3, Math.max(0, app.routes.length - app.pageStart));
+  payload.HOME_SELECTED = Math.max(0, app.activeIndex - app.pageStart);
+  payload.PAGE_INDEX = Math.floor(app.pageStart / 3);
+  payload.PAGE_COUNT = pageCount;
+  for (var index = 0; index < 3; index += 1) {
+    var route = app.routes[app.pageStart + index];
+    var direction = route && currentDirection(route);
+    var departure = direction && direction.departures[0];
+    var prefix = 'HOME_' + (index + 1) + '_';
+    payload[prefix + 'ROUTE'] = route ? route.name : '';
+    payload[prefix + 'HEADSIGN'] = direction ? direction.headsign : '';
+    payload[prefix + 'STOP'] = direction ? direction.closestStopName : '';
+    payload[prefix + 'ETA'] = departure ? departure.departureTime : 0;
+    payload[prefix + 'LIVE'] = departure && departure.realTime ? 1 : 0;
+    payload[prefix + 'COLOR'] = route ? route.routeColor : 0x333333;
+    payload[prefix + 'TEXT_COLOR'] = route ? route.textColor : 0xFFFFFF;
+    payload[prefix + 'FAVORITE'] = route && route.favorite ? 1 : 0;
+  }
+  return payload;
+}
+
 function sendCurrent() {
   var route = currentRoute();
   if (!route) {
@@ -283,7 +306,7 @@ function sendCurrent() {
     DETAIL_ACTIVE: app.detailActive ? 1 : 0,
     DEPARTURE_INDEX: app.departureIndex
   };
-  send(stopPayload(payload));
+  send(homePayload(stopPayload(payload)));
 }
 
 function apiError(status) {
@@ -396,6 +419,7 @@ function loadNearby(coords) {
       sendError('No enabled transit lines found within ' + config.radius + ' m.');
       return;
     }
+    app.pageStart = Math.floor(app.activeIndex / 3) * 3;
     app.lastLiveRefreshAt = Date.now();
     app.lastLiveRouteId = currentRoute().id;
     app.error = '';
@@ -410,6 +434,7 @@ function loadNearby(coords) {
 }
 
 function refreshSelectedLine(force) {
+  if (!app.detailActive) { sendCurrent(); return; }
   var route = currentRoute();
   var direction = currentDirection(route);
   if (!route || !direction || !direction.closestStopId || app.requestActive) {
@@ -417,7 +442,7 @@ function refreshSelectedLine(force) {
     return;
   }
   if (!force && app.lastLiveRouteId === route.id &&
-      Date.now() - app.lastLiveRefreshAt < LIVE_REFRESH_MS - 2000) {
+      Date.now() - app.lastLiveRefreshAt < REFRESH_MS - 2000) {
     sendCurrent();
     return;
   }
@@ -464,9 +489,6 @@ function refreshSelectedLine(force) {
     app.error = '';
     cacheRoutes();
     sendCurrent();
-    if (currentRoute() && currentRoute().id !== route.id) {
-      scheduleLiveRefresh(true);
-    }
   }, function(message) {
     app.requestActive = false;
     app.error = message;
@@ -484,8 +506,12 @@ function scheduleLiveRefresh(force) {
 
 function refresh(force) {
   if (app.requestActive) { return; }
-  if (!force && app.routes.length && Date.now() - app.lastRefreshAt < NEARBY_REFRESH_MS) {
-    refreshSelectedLine(false);
+  if (app.detailActive) {
+    refreshSelectedLine(force);
+    return;
+  }
+  if (!force && app.routes.length && Date.now() - app.lastRefreshAt < REFRESH_MS - 2000) {
+    sendCurrent();
     return;
   }
   if (!settings().apiKey) {
@@ -504,15 +530,27 @@ function refresh(force) {
   }, {enableHighAccuracy: true, timeout: 15000, maximumAge: 45000});
 }
 
-function changeLine(delta) {
+function changePage(delta) {
   if (!app.routes.length) { refresh(true); return; }
-  app.activeIndex = (app.activeIndex + delta + app.routes.length) % app.routes.length;
-  app.detailActive = false;
+  var pageCount = Math.ceil(app.routes.length / 3);
+  var page = (Math.floor(app.pageStart / 3) + delta + pageCount) % pageCount;
+  app.pageStart = page * 3;
+  app.activeIndex = app.pageStart;
   app.departureIndex = 0;
   app.stops = [];
   app.error = '';
   sendCurrent();
-  scheduleLiveRefresh(true);
+}
+
+function changeRow(delta) {
+  if (!app.routes.length) { return; }
+  var count = Math.min(3, app.routes.length - app.pageStart);
+  var row = (app.activeIndex - app.pageStart + delta + count) % count;
+  app.activeIndex = app.pageStart + row;
+  app.departureIndex = 0;
+  app.stops = [];
+  app.error = '';
+  sendCurrent();
 }
 
 function changeDirection() {
@@ -524,7 +562,6 @@ function changeDirection() {
   app.stops = [];
   app.error = '';
   sendCurrent();
-  scheduleLiveRefresh(true);
 }
 
 function selectedDeparture() {
@@ -532,7 +569,7 @@ function selectedDeparture() {
   return direction && direction.departures[app.departureIndex] || null;
 }
 
-function loadTripDetails() {
+function loadTripDetails(refreshLive) {
   var direction = currentDirection();
   var departure = selectedDeparture();
   app.stops = [];
@@ -546,7 +583,7 @@ function loadTripDetails() {
     app.stops = transit.upcomingStops(cached.body, direction, departure, 5);
     app.detailLoading = false;
     sendCurrent();
-    scheduleLiveRefresh(true);
+    if (refreshLive) { scheduleLiveRefresh(true); }
     return;
   }
   app.detailLoading = true;
@@ -560,7 +597,7 @@ function loadTripDetails() {
     app.detailLoading = false;
     app.error = '';
     sendCurrent();
-    scheduleLiveRefresh(true);
+    if (refreshLive) { scheduleLiveRefresh(true); }
   }, function(message) {
     app.detailLoading = false;
     app.error = message;
@@ -573,13 +610,18 @@ function openDetails() {
   app.detailActive = true;
   app.departureIndex = 0;
   app.error = '';
-  loadTripDetails();
+  loadTripDetails(true);
 }
 
 function closeDetails() {
   app.detailActive = false;
   app.detailLoading = false;
   app.stops = [];
+  if (liveRefreshTimer) {
+    clearTimeout(liveRefreshTimer);
+    liveRefreshTimer = null;
+  }
+  refresh(false);
 }
 
 function cycleDeparture(delta) {
@@ -587,7 +629,7 @@ function cycleDeparture(delta) {
   if (!direction || !direction.departures.length) { return; }
   app.departureIndex = (app.departureIndex + delta + direction.departures.length) %
     direction.departures.length;
-  loadTripDetails();
+  loadTripDetails(false);
 }
 
 function toggleFavorite() {
@@ -609,7 +651,8 @@ Pebble.addEventListener('ready', function() {
 
 Pebble.addEventListener('appmessage', function(event) {
   var payload = event.payload;
-  if (payload.REQUEST_LINE_DELTA) { changeLine(Number(payload.REQUEST_LINE_DELTA)); }
+  if (payload.REQUEST_PAGE_DELTA) { changePage(Number(payload.REQUEST_PAGE_DELTA)); }
+  else if (payload.REQUEST_ROW_DELTA) { changeRow(Number(payload.REQUEST_ROW_DELTA)); }
   else if (payload.REQUEST_DIRECTION) { changeDirection(); }
   else if (payload.REQUEST_DETAILS) {
     if (Number(payload.REQUEST_DETAILS) === 2) { closeDetails(); }
