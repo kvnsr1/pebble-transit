@@ -17,7 +17,6 @@ typedef struct {
   char stop_names[STOP_LIMIT][38];
   char home_route_names[HOME_ROWS][16];
   char home_headsigns[HOME_ROWS][40];
-  char home_stop_names[HOME_ROWS][48];
   int32_t departures[3];
   int32_t stop_times[STOP_LIMIT];
   int32_t home_departures[HOME_ROWS];
@@ -54,8 +53,8 @@ static int s_signal_frame;
 static int s_animation_tick;
 static int s_slide_offset;
 static int s_pending_slide_direction;
-static int s_marker_y = 62;
-static int s_marker_target_y = 62;
+static int s_marker_y = 38;
+static int s_marker_target_y = 38;
 static bool s_marker_ready;
 
 static GColor color_from_hex(uint32_t rgb) {
@@ -83,11 +82,11 @@ static void format_eta(int32_t epoch, char *buffer, size_t size) {
     return;
   }
   int32_t seconds = epoch - (int32_t)time(NULL);
-  if (seconds <= 30) {
+  if (seconds < 60) {
     snprintf(buffer, size, "NOW");
     return;
   }
-  int minutes = (seconds + 59) / 60;
+  int minutes = seconds / 60;
   if (minutes < 60) {
     snprintf(buffer, size, "%d min", minutes);
     return;
@@ -98,6 +97,28 @@ static void format_eta(int32_t epoch, char *buffer, size_t size) {
   if (!clock_is_24h_style() && buffer[0] == '0') {
     memmove(buffer, buffer + 1, strlen(buffer));
   }
+}
+
+static void format_clock_eta(int32_t epoch, char *buffer, size_t size) {
+  if (epoch <= 0) {
+    snprintf(buffer, size, "--");
+    return;
+  }
+  time_t value = (time_t)epoch;
+  struct tm *local = localtime(&value);
+  if (clock_is_24h_style()) {
+    strftime(buffer, size, "%H:%M", local);
+    return;
+  }
+  char full[12];
+  strftime(full, sizeof(full), "%I:%M%p", local);
+  char *start = full[0] == '0' ? full + 1 : full;
+  size_t length = strlen(start);
+  if (length >= 2) {
+    start[length - 2] = start[length - 2] == 'A' ? 'a' : 'p';
+    start[length - 1] = '\0';
+  }
+  snprintf(buffer, size, "%s", start);
 }
 
 static void draw_live_signal(GContext *ctx, GPoint center, GColor color, int frame) {
@@ -222,45 +243,36 @@ static void draw_home(GContext *ctx, GRect bounds) {
     graphics_fill_rect(ctx, GRect(0, y, bounds.size.w, 76), 0, GCornerNone);
 
     graphics_context_set_fill_color(ctx, ink);
-    graphics_fill_circle(ctx, GPoint(23, y + 28), 18);
-    draw_text(ctx, s_transit.home_route_names[i], GRect(7, y + 14, 33, 28),
+    graphics_fill_circle(ctx, GPoint(28, y + 38), 22);
+    draw_text(ctx, s_transit.home_route_names[i], GRect(8, y + 23, 40, 30),
               fonts_get_system_font(strlen(s_transit.home_route_names[i]) > 3 ?
                 FONT_KEY_GOTHIC_14_BOLD : FONT_KEY_GOTHIC_24_BOLD),
               accent, GTextAlignmentCenter);
 
-    draw_text(ctx, s_transit.home_headsigns[i], GRect(47, y + 7, 105, 25),
+    draw_text(ctx, s_transit.home_headsigns[i], GRect(58, y + 10, 91, 52),
               fonts_get_system_font(FONT_KEY_GOTHIC_18_BOLD), ink,
-              GTextAlignmentLeft);
-    draw_text(ctx, s_transit.home_stop_names[i], GRect(47, y + 31, 108, 22),
-              fonts_get_system_font(FONT_KEY_GOTHIC_14), ink,
               GTextAlignmentLeft);
 
     char eta[14];
     format_eta(s_transit.home_departures[i], eta, sizeof(eta));
-    draw_text(ctx, eta, GRect(151, y + 10, 43, 30),
+    draw_text(ctx, eta, GRect(150, y + 17, 44, 30),
               fonts_get_system_font(FONT_KEY_GOTHIC_24_BOLD), ink,
               GTextAlignmentRight);
     if (s_transit.home_live[i]) {
-      draw_live_signal(ctx, GPoint(184, y + 48), ink, s_signal_frame);
+      draw_live_signal(ctx, GPoint(184, y + 51), ink, s_signal_frame);
     } else {
-      draw_text(ctx, "S", GRect(174, y + 42, 18, 18),
+      draw_text(ctx, "S", GRect(174, y + 45, 18, 18),
                 fonts_get_system_font(FONT_KEY_GOTHIC_14_BOLD), ink,
                 GTextAlignmentCenter);
     }
     if (s_transit.home_favorite[i]) {
-      draw_text(ctx, "◆", GRect(4, y + 2, 14, 16),
-                fonts_get_system_font(FONT_KEY_GOTHIC_14_BOLD), ink,
-                GTextAlignmentLeft);
+      graphics_context_set_fill_color(ctx, ink);
+      graphics_fill_circle(ctx, GPoint(7, y + 7), 2);
     }
 
     graphics_context_set_stroke_color(ctx, ink);
-    if (i == s_transit.home_selected) {
-      graphics_context_set_stroke_width(ctx, 2);
-      graphics_draw_round_rect(ctx, GRect(2, y + 2, bounds.size.w - 4, 72), 7);
-    } else {
-      graphics_context_set_stroke_width(ctx, 1);
-      graphics_draw_line(ctx, GPoint(5, y + 75), GPoint(bounds.size.w - 5, y + 75));
-    }
+    graphics_context_set_stroke_width(ctx, 1);
+    graphics_draw_line(ctx, GPoint(5, y + 75), GPoint(bounds.size.w - 5, y + 75));
   }
 
   if (s_transit.home_count > 0) {
@@ -268,8 +280,7 @@ static void draw_home(GContext *ctx, GRect bounds) {
     GColor marker_color = color_from_hex(
       s_transit.home_text_colors[s_transit.home_selected]);
     graphics_context_set_fill_color(ctx, marker_color);
-    graphics_fill_circle(ctx, GPoint(44, marker_y), 3);
-    graphics_fill_rect(ctx, GRect(40, marker_y - 1, 4, 3), 1, GCornersAll);
+    graphics_fill_rect(ctx, GRect(1, marker_y - 9, 3, 18), 2, GCornersAll);
   }
 
   char page[24];
@@ -383,8 +394,8 @@ static void draw_stops_page(GContext *ctx, GRect bounds) {
                 fonts_get_system_font(i == 0 ? FONT_KEY_GOTHIC_14_BOLD : FONT_KEY_GOTHIC_14),
                 GColorBlack, GTextAlignmentLeft);
       char stop_eta[14];
-      format_eta(s_transit.stop_times[i], stop_eta, sizeof(stop_eta));
-      draw_text(ctx, stop_eta, GRect(144, y + 2, 44, 20),
+      format_clock_eta(s_transit.stop_times[i], stop_eta, sizeof(stop_eta));
+      draw_text(ctx, stop_eta, GRect(139, y + 2, 49, 20),
                 fonts_get_system_font(FONT_KEY_GOTHIC_14_BOLD), route_color(),
                 GTextAlignmentRight);
     }
@@ -581,7 +592,7 @@ static void inbox_received(DictionaryIterator *iter, void *context) {
   if (s_transit.home_selected < 0 || s_transit.home_selected >= s_transit.home_count) {
     s_transit.home_selected = 0;
   }
-  s_marker_target_y = s_transit.home_selected * 76 + 62;
+  s_marker_target_y = s_transit.home_selected * 76 + 38;
   if (!s_marker_ready || s_transit.page_index != previous_page_index) {
     s_marker_y = s_marker_target_y;
     s_marker_ready = true;
@@ -612,9 +623,6 @@ static void inbox_received(DictionaryIterator *iter, void *context) {
   const uint32_t home_headsign_keys[HOME_ROWS] = {
     MESSAGE_KEY_HOME_1_HEADSIGN, MESSAGE_KEY_HOME_2_HEADSIGN, MESSAGE_KEY_HOME_3_HEADSIGN
   };
-  const uint32_t home_stop_keys[HOME_ROWS] = {
-    MESSAGE_KEY_HOME_1_STOP, MESSAGE_KEY_HOME_2_STOP, MESSAGE_KEY_HOME_3_STOP
-  };
   const uint32_t home_eta_keys[HOME_ROWS] = {
     MESSAGE_KEY_HOME_1_ETA, MESSAGE_KEY_HOME_2_ETA, MESSAGE_KEY_HOME_3_ETA
   };
@@ -637,8 +645,6 @@ static void inbox_received(DictionaryIterator *iter, void *context) {
                sizeof(s_transit.home_route_names[i]));
     copy_tuple(iter, home_headsign_keys[i], s_transit.home_headsigns[i],
                sizeof(s_transit.home_headsigns[i]));
-    copy_tuple(iter, home_stop_keys[i], s_transit.home_stop_names[i],
-               sizeof(s_transit.home_stop_names[i]));
     s_transit.home_departures[i] = tuple_int(iter, home_eta_keys[i],
                                              s_transit.home_departures[i]);
     s_transit.home_live[i] = tuple_int(iter, home_live_keys[i],
@@ -682,8 +688,6 @@ static void init(void) {
   s_transit.home_text_colors[0] = s_transit.text_color;
   snprintf(s_transit.home_route_names[0], sizeof(s_transit.home_route_names[0]), "T");
   snprintf(s_transit.home_headsigns[0], sizeof(s_transit.home_headsigns[0]), "Nearby lines");
-  snprintf(s_transit.home_stop_names[0], sizeof(s_transit.home_stop_names[0]),
-           "Finding your location");
   s_transit.loading = true;
 
   s_window = window_create();

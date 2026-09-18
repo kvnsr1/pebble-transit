@@ -261,7 +261,6 @@ function homePayload(payload) {
     var prefix = 'HOME_' + (index + 1) + '_';
     payload[prefix + 'ROUTE'] = route ? route.name : '';
     payload[prefix + 'HEADSIGN'] = direction ? direction.headsign : '';
-    payload[prefix + 'STOP'] = direction ? direction.closestStopName : '';
     payload[prefix + 'ETA'] = departure ? departure.departureTime : 0;
     payload[prefix + 'LIVE'] = departure && departure.realTime ? 1 : 0;
     payload[prefix + 'COLOR'] = route ? route.routeColor : 0x333333;

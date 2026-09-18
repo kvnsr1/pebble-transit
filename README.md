@@ -1,6 +1,6 @@
 # Pebble Transit
 
-Pebble Transit is a Pebble Time 2 companion for nearby public transportation. It mirrors the glanceable part of Transit’s Nearby screen with three route-colored nearby lines per page, nearest stops, directions, and live departure countdowns. A detail view shows the next three departures and the upcoming stops for the selected trip.
+Pebble Transit is a Pebble Time 2 companion for nearby public transportation. It mirrors the glanceable part of Transit’s Nearby screen with three route-colored nearby lines per page, directions, and live departure countdowns. A detail view shows the next three departures and the upcoming stops for the selected trip.
 
 ## Architecture
 
@@ -74,7 +74,7 @@ GitHub Pages publishes the settings page from this repository’s `main` branch.
 - **Up / Down:** toggle between the departure board and upcoming stops for the highlighted trip.
 - **Back:** return to nearby lines.
 
-Stop ETAs use Transit’s live stop-departure data when available, with the selected trip’s real-time offset as a fallback.
+Stop ETAs use Transit’s live stop-departure data when available, with the selected trip’s real-time offset as a fallback. The stop timeline displays clock times, while the home and departure-board countdowns display whole elapsed minutes without rounding partial minutes upward.
 
 ## Configuration
 
