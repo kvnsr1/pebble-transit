@@ -530,23 +530,10 @@ function refresh(force) {
   }, {enableHighAccuracy: true, timeout: 15000, maximumAge: 45000});
 }
 
-function changePage(delta) {
-  if (!app.routes.length) { refresh(true); return; }
-  var pageCount = Math.ceil(app.routes.length / 3);
-  var page = (Math.floor(app.pageStart / 3) + delta + pageCount) % pageCount;
-  app.pageStart = page * 3;
-  app.activeIndex = app.pageStart;
-  app.departureIndex = 0;
-  app.stops = [];
-  app.error = '';
-  sendCurrent();
-}
-
-function changeRow(delta) {
+function moveSelection(delta) {
   if (!app.routes.length) { return; }
-  var count = Math.min(3, app.routes.length - app.pageStart);
-  var row = (app.activeIndex - app.pageStart + delta + count) % count;
-  app.activeIndex = app.pageStart + row;
+  app.activeIndex = (app.activeIndex + delta + app.routes.length) % app.routes.length;
+  app.pageStart = Math.floor(app.activeIndex / 3) * 3;
   app.departureIndex = 0;
   app.stops = [];
   app.error = '';
@@ -651,8 +638,7 @@ Pebble.addEventListener('ready', function() {
 
 Pebble.addEventListener('appmessage', function(event) {
   var payload = event.payload;
-  if (payload.REQUEST_PAGE_DELTA) { changePage(Number(payload.REQUEST_PAGE_DELTA)); }
-  else if (payload.REQUEST_ROW_DELTA) { changeRow(Number(payload.REQUEST_ROW_DELTA)); }
+  if (payload.REQUEST_ROW_DELTA) { moveSelection(Number(payload.REQUEST_ROW_DELTA)); }
   else if (payload.REQUEST_DIRECTION) { changeDirection(); }
   else if (payload.REQUEST_DETAILS) {
     if (Number(payload.REQUEST_DETAILS) === 2) { closeDetails(); }

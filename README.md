@@ -62,11 +62,10 @@ GitHub Pages publishes the settings page from this repository’s `main` branch.
 
 ### Nearby lines
 
-- **Up / Down:** move through pages of three nearby lines.
-- **Select:** move the highlight among the three visible lines.
+- **Up / Down:** move the highlight line by line. Moving beyond the top or bottom row automatically reveals the previous or next group of three.
+- **Select:** switch the highlighted line’s direction using already-loaded nearby data.
 - **Hold Select:** open the highlighted line’s next-three-departures view.
 - **Hold Up:** pin or unpin the highlighted line. Nearby pinned lines sort first after the next refresh.
-- **Hold Down:** switch the highlighted line’s direction using the already-loaded nearby data.
 - **Back:** exit.
 
 ### Line details

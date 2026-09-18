@@ -54,6 +54,9 @@ static int s_signal_frame;
 static int s_animation_tick;
 static int s_slide_offset;
 static int s_pending_slide_direction;
+static int s_marker_y = 62;
+static int s_marker_target_y = 62;
+static bool s_marker_ready;
 
 static GColor color_from_hex(uint32_t rgb) {
 #ifdef PBL_COLOR
@@ -238,7 +241,7 @@ static void draw_home(GContext *ctx, GRect bounds) {
               fonts_get_system_font(FONT_KEY_GOTHIC_24_BOLD), ink,
               GTextAlignmentRight);
     if (s_transit.home_live[i]) {
-      draw_live_signal(ctx, GPoint(184, y + 48), ink, s_signal_frame + i);
+      draw_live_signal(ctx, GPoint(184, y + 48), ink, s_signal_frame);
     } else {
       draw_text(ctx, "S", GRect(174, y + 42, 18, 18),
                 fonts_get_system_font(FONT_KEY_GOTHIC_14_BOLD), ink,
@@ -251,14 +254,22 @@ static void draw_home(GContext *ctx, GRect bounds) {
     }
 
     graphics_context_set_stroke_color(ctx, ink);
-    graphics_context_set_stroke_width(ctx, i == s_transit.home_selected ? 3 : 1);
-    graphics_draw_rect(ctx, GRect(i == s_transit.home_selected ? 1 : 0,
-                                  y + (i == s_transit.home_selected ? 1 : 0),
-                                  bounds.size.w - (i == s_transit.home_selected ? 2 : 1),
-                                  76 - (i == s_transit.home_selected ? 2 : 1)));
     if (i == s_transit.home_selected) {
-      graphics_fill_circle(ctx, GPoint(44, y + 62), 3);
+      graphics_context_set_stroke_width(ctx, 2);
+      graphics_draw_round_rect(ctx, GRect(2, y + 2, bounds.size.w - 4, 72), 7);
+    } else {
+      graphics_context_set_stroke_width(ctx, 1);
+      graphics_draw_line(ctx, GPoint(5, y + 75), GPoint(bounds.size.w - 5, y + 75));
     }
+  }
+
+  if (s_transit.home_count > 0) {
+    int marker_y = s_marker_y + s_slide_offset;
+    GColor marker_color = color_from_hex(
+      s_transit.home_text_colors[s_transit.home_selected]);
+    graphics_context_set_fill_color(ctx, marker_color);
+    graphics_fill_circle(ctx, GPoint(44, marker_y), 3);
+    graphics_fill_rect(ctx, GRect(40, marker_y - 1, 4, 3), 1, GCornersAll);
   }
 
   char page[24];
@@ -294,7 +305,7 @@ static void draw_detail_header(GContext *ctx, GRect bounds, const char *label) {
 static void draw_page_rail(GContext *ctx, int active) {
   for (int i = 0; i < 2; i++) {
     graphics_context_set_fill_color(ctx, i == active ? route_color() : GColorLightGray);
-    graphics_fill_circle(ctx, GPoint(196, 106 + i * 17), i == active ? 3 : 2);
+    graphics_fill_circle(ctx, GPoint(193, 106 + i * 17), i == active ? 3 : 2);
   }
 }
 
@@ -324,7 +335,7 @@ static void draw_departures_page(GContext *ctx, GRect bounds) {
               fonts_get_system_font(FONT_KEY_GOTHIC_24_BOLD), ink,
               GTextAlignmentLeft);
     if (s_transit.live[i]) {
-      draw_live_signal(ctx, GPoint(170, y + 11), ink, s_signal_frame + i);
+      draw_live_signal(ctx, GPoint(170, y + 11), ink, s_signal_frame);
     } else {
       draw_text(ctx, "S", GRect(157, y + 7, 20, 18),
                 fonts_get_system_font(FONT_KEY_GOTHIC_14_BOLD), ink,
@@ -407,6 +418,18 @@ static void animation_timer_callback(void *context) {
     s_slide_offset += slide_step;
     if (s_slide_offset > 0) { s_slide_offset = 0; }
   }
+  int marker_delta = s_marker_target_y - s_marker_y;
+  if (marker_delta != 0) {
+    int marker_step = abs(marker_delta) / 3;
+    if (marker_step < 2) { marker_step = 2; }
+    if (marker_delta > 0) {
+      s_marker_y += marker_step;
+      if (s_marker_y > s_marker_target_y) { s_marker_y = s_marker_target_y; }
+    } else {
+      s_marker_y -= marker_step;
+      if (s_marker_y < s_marker_target_y) { s_marker_y = s_marker_target_y; }
+    }
+  }
   if (s_canvas) { layer_mark_dirty(s_canvas); }
   s_animation_timer = app_timer_register(ANIMATION_INTERVAL_MS, animation_timer_callback, NULL);
 }
@@ -419,11 +442,10 @@ static void send_request(uint32_t key, int8_t value) {
   }
 }
 
-static void change_page(int delta) {
+static void move_selection(int delta) {
   s_pending_slide_direction = delta;
-  s_slide_offset = delta > 0 ? -18 : 18;
   s_transit.error[0] = '\0';
-  send_request(MESSAGE_KEY_REQUEST_PAGE_DELTA, delta);
+  send_request(MESSAGE_KEY_REQUEST_ROW_DELTA, delta);
   layer_mark_dirty(s_canvas);
 }
 
@@ -431,14 +453,14 @@ static void up_click(ClickRecognizerRef recognizer, void *context) {
   if (s_transit.detail_active) {
     s_detail_page = (s_detail_page + 1) % 2;
     layer_mark_dirty(s_canvas);
-  } else { change_page(-1); }
+  } else { move_selection(-1); }
 }
 
 static void down_click(ClickRecognizerRef recognizer, void *context) {
   if (s_transit.detail_active) {
     s_detail_page = (s_detail_page + 1) % 2;
     layer_mark_dirty(s_canvas);
-  } else { change_page(1); }
+  } else { move_selection(1); }
 }
 
 static void select_click(ClickRecognizerRef recognizer, void *context) {
@@ -447,7 +469,7 @@ static void select_click(ClickRecognizerRef recognizer, void *context) {
     s_transit.loading = true;
     send_request(MESSAGE_KEY_REQUEST_DEPARTURE, 1);
   } else {
-    send_request(MESSAGE_KEY_REQUEST_ROW_DELTA, 1);
+    send_request(MESSAGE_KEY_REQUEST_DIRECTION, 1);
   }
   layer_mark_dirty(s_canvas);
 }
@@ -475,14 +497,6 @@ static void up_long_click(ClickRecognizerRef recognizer, void *context) {
   layer_mark_dirty(s_canvas);
 }
 
-static void down_long_click(ClickRecognizerRef recognizer, void *context) {
-  if (s_transit.detail_active) { return; }
-  s_transit.error[0] = '\0';
-  send_request(MESSAGE_KEY_REQUEST_DIRECTION, 1);
-  vibes_short_pulse();
-  layer_mark_dirty(s_canvas);
-}
-
 static void back_click(ClickRecognizerRef recognizer, void *context) {
   if (s_transit.detail_active) {
     s_transit.detail_active = false;
@@ -500,7 +514,6 @@ static void click_config(void *context) {
   window_single_click_subscribe(BUTTON_ID_SELECT, select_click);
   window_long_click_subscribe(BUTTON_ID_SELECT, 650, select_long_click, NULL);
   window_single_click_subscribe(BUTTON_ID_DOWN, down_click);
-  window_long_click_subscribe(BUTTON_ID_DOWN, 650, down_long_click, NULL);
   window_single_click_subscribe(BUTTON_ID_BACK, back_click);
 }
 
@@ -527,6 +540,7 @@ static int32_t tuple_int(DictionaryIterator *iter, uint32_t key, int32_t fallbac
 
 static void inbox_received(DictionaryIterator *iter, void *context) {
   int previous_page_index = s_transit.page_index;
+  int previous_home_selected = s_transit.home_selected;
   copy_tuple(iter, MESSAGE_KEY_ROUTE_NAME, s_transit.route_name, sizeof(s_transit.route_name));
   copy_tuple(iter, MESSAGE_KEY_ROUTE_LONG_NAME, s_transit.route_long_name, sizeof(s_transit.route_long_name));
   copy_tuple(iter, MESSAGE_KEY_HEADSIGN, s_transit.headsign, sizeof(s_transit.headsign));
@@ -557,10 +571,6 @@ static void inbox_received(DictionaryIterator *iter, void *context) {
   s_transit.home_selected = tuple_int(iter, MESSAGE_KEY_HOME_SELECTED, s_transit.home_selected);
   s_transit.page_index = tuple_int(iter, MESSAGE_KEY_PAGE_INDEX, s_transit.page_index);
   s_transit.page_count = tuple_int(iter, MESSAGE_KEY_PAGE_COUNT, s_transit.page_count);
-  if (s_transit.page_index != previous_page_index && s_pending_slide_direction != 0) {
-    s_slide_offset = s_pending_slide_direction > 0 ? 76 : -76;
-    s_pending_slide_direction = 0;
-  }
   if (s_transit.departure_index < 0 || s_transit.departure_index > 2) {
     s_transit.departure_index = 0;
   }
@@ -571,6 +581,17 @@ static void inbox_received(DictionaryIterator *iter, void *context) {
   if (s_transit.home_selected < 0 || s_transit.home_selected >= s_transit.home_count) {
     s_transit.home_selected = 0;
   }
+  s_marker_target_y = s_transit.home_selected * 76 + 62;
+  if (!s_marker_ready || s_transit.page_index != previous_page_index) {
+    s_marker_y = s_marker_target_y;
+    s_marker_ready = true;
+  } else if (s_transit.home_selected == previous_home_selected) {
+    s_marker_y = s_marker_target_y;
+  }
+  if (s_transit.page_index != previous_page_index && s_pending_slide_direction != 0) {
+    s_slide_offset = s_pending_slide_direction > 0 ? 228 : -228;
+  }
+  s_pending_slide_direction = 0;
 
   const uint32_t name_keys[STOP_LIMIT] = {
     MESSAGE_KEY_STOP_1_NAME, MESSAGE_KEY_STOP_2_NAME, MESSAGE_KEY_STOP_3_NAME,
