@@ -2,6 +2,8 @@
 
 Pebble Transit is a Pebble Time 2 companion for nearby public transportation. It mirrors the glanceable part of Transit’s Nearby screen with three route-colored nearby lines per page, directions, and live departure countdowns. A detail view shows the next three departures and the upcoming stops for the selected trip.
 
+Home route badges use at most three bold characters. Short route numbers and letters are preserved, directional names use familiar initials such as `E` for East, and longer multi-word names use contextual initials such as `VN` for Van Nuys.
+
 ## Architecture
 
 - The native C watch app targets `emery` (Pebble Time 2).

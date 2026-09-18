@@ -259,7 +259,7 @@ function homePayload(payload) {
     var direction = route && currentDirection(route);
     var departure = direction && direction.departures[0];
     var prefix = 'HOME_' + (index + 1) + '_';
-    payload[prefix + 'ROUTE'] = route ? route.name : '';
+    payload[prefix + 'ROUTE'] = route ? (route.badge || transit.routeBadge(route.name)) : '';
     payload[prefix + 'HEADSIGN'] = direction ? direction.headsign : '';
     payload[prefix + 'ETA'] = departure ? departure.departureTime : 0;
     payload[prefix + 'LIVE'] = departure && departure.realTime ? 1 : 0;

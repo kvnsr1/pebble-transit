@@ -67,6 +67,38 @@ function displayRouteName(route) {
   return compact(route.route_short_name || route.route_long_name || 'Line', 12);
 }
 
+function routeBadge(value) {
+  var clean = text(value, 'T').toUpperCase().replace(/…/g, '')
+    .replace(/[^A-Z0-9]+/g, ' ').replace(/^\s+|\s+$/g, '');
+  var directions = {
+    EAST: 'E', EASTBOUND: 'E', WEST: 'W', WESTBOUND: 'W',
+    NORTH: 'N', NORTHBOUND: 'N', SOUTH: 'S', SOUTHBOUND: 'S',
+    NORTHEAST: 'NE', NORTHWEST: 'NW', SOUTHEAST: 'SE', SOUTHWEST: 'SW'
+  };
+  var colors = {
+    BLUE: 'BLU', GREEN: 'GRN', YELLOW: 'YEL', ORANGE: 'ORG',
+    PURPLE: 'PUR', SILVER: 'SLV', GOLD: 'GLD'
+  };
+  if (directions[clean]) { return directions[clean]; }
+  if (colors[clean]) { return colors[clean]; }
+  if (/^[A-Z0-9]{1,3}$/.test(clean)) { return clean; }
+
+  var ignored = {DASH: true, LINE: true, ROUTE: true, BUS: true,
+    METRO: true, RAPID: true, EXPRESS: true, LOCAL: true};
+  var tokens = clean.split(/\s+/).filter(function(token) {
+    return token && !ignored[token];
+  });
+  if (tokens.length > 1) {
+    return tokens.map(function(token) { return token.charAt(0); }).join('').slice(0, 3);
+  }
+  if (tokens.length === 1) {
+    if (directions[tokens[0]]) { return directions[tokens[0]]; }
+    if (colors[tokens[0]]) { return colors[tokens[0]]; }
+    return tokens[0].slice(0, 3);
+  }
+  return clean.slice(0, 3) || 'T';
+}
+
 function canonicalItinerary(merged) {
   var itineraries = merged.itineraries || [];
   for (var i = 0; i < itineraries.length; i += 1) {
@@ -110,11 +142,13 @@ function normalizeRoutes(body, options) {
   var now = options.now || Math.floor(Date.now() / 1000);
   var routes = (body && body.nearby_routes || []).map(function(route) {
     var mode = modeFor(route);
+    var name = displayRouteName(route);
     var directions = (route.merged_itineraries || []).map(normalizeDirection)
       .filter(function(direction) { return direction.departures.length; });
     return {
       id: text(route.global_route_id),
-      name: displayRouteName(route),
+      name: name,
+      badge: routeBadge(route.route_short_name || route.route_long_name || 'Line'),
       longName: compact(route.route_long_name || route.route_network_name || mode.name, 36),
       networkName: compact(route.route_network_name, 24),
       routeColor: colorValue(route.route_color, 0x29A66A),
@@ -256,6 +290,7 @@ module.exports = {
   displayRouteName: displayRouteName,
   modeCatalog: modeCatalog,
   modeFor: modeFor,
+  routeBadge: routeBadge,
   liveDepartures: liveDepartures,
   liveStopTimes: liveStopTimes,
   normalizeRoutes: normalizeRoutes,

@@ -244,10 +244,23 @@ static void draw_home(GContext *ctx, GRect bounds) {
 
     graphics_context_set_fill_color(ctx, ink);
     graphics_fill_circle(ctx, GPoint(28, y + 38), 22);
-    draw_text(ctx, s_transit.home_route_names[i], GRect(8, y + 23, 40, 30),
-              fonts_get_system_font(strlen(s_transit.home_route_names[i]) > 3 ?
-                FONT_KEY_GOTHIC_14_BOLD : FONT_KEY_GOTHIC_24_BOLD),
-              accent, GTextAlignmentCenter);
+    size_t badge_length = strlen(s_transit.home_route_names[i]);
+    GFont badge_font;
+    GRect badge_rect;
+    if (badge_length == 1) {
+      badge_font = fonts_get_system_font(FONT_KEY_BITHAM_30_BLACK);
+      badge_rect = GRect(7, y + 18, 42, 38);
+    } else {
+      badge_font = fonts_get_system_font(badge_length == 2 ?
+        FONT_KEY_BITHAM_30_BLACK : FONT_KEY_GOTHIC_24_BOLD);
+      badge_rect = GRect(7, y + (badge_length == 2 ? 18 : 23), 42,
+                         badge_length == 2 ? 38 : 31);
+    }
+    draw_text(ctx, s_transit.home_route_names[i], badge_rect,
+              badge_font, accent, GTextAlignmentCenter);
+    badge_rect.origin.x += 1;
+    draw_text(ctx, s_transit.home_route_names[i], badge_rect,
+              badge_font, accent, GTextAlignmentCenter);
 
     draw_text(ctx, s_transit.home_headsigns[i], GRect(58, y + 10, 91, 52),
               fonts_get_system_font(FONT_KEY_GOTHIC_18_BOLD), ink,

@@ -68,6 +68,19 @@ var body = {nearby_routes: [
   assert.strictEqual(transit.modeFor({mode_key: 'CableCar', route_type: 5}).code, 5);
 })();
 
+(function buildsCompactContextualRouteBadges() {
+  assert.strictEqual(transit.routeBadge('East'), 'E');
+  assert.strictEqual(transit.routeBadge('Van Nuys'), 'VN');
+  assert.strictEqual(transit.routeBadge('DASH Van Nuys'), 'VN');
+  assert.strictEqual(transit.routeBadge('165'), '165');
+  assert.strictEqual(transit.routeBadge('Blue'), 'BLU');
+  assert.strictEqual(transit.routeBadge('Universal Studio City'), 'USC');
+  assert.strictEqual(transit.normalizeRoutes(body, {})[0].badge, '10');
+  var directional = JSON.parse(JSON.stringify(body));
+  directional.nearby_routes[0].route_short_name = 'East';
+  assert.strictEqual(transit.normalizeRoutes(directional, {})[0].badge, 'E');
+})();
+
 (function offsetsStopTimesByRealtimeDeparture() {
   var routes = transit.normalizeRoutes(body, {});
   var direction = routes[0].directions[0];
