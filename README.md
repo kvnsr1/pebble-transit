@@ -4,6 +4,8 @@ Pebble Transit is a Pebble Time 2 companion for nearby public transportation. It
 
 Home route badges use at most three bold characters. Short route numbers and letters are preserved, directional names use familiar initials such as `E` for East, and longer multi-word names use contextual initials such as `VN` for Van Nuys.
 
+The watch launcher and mobile Pebble app share the same transparent, borderless train icon. The packaged launcher resource is sized to Pebble's 25×25 menu-icon requirement, with a high-resolution source retained under `resources/images/`.
+
 ## Architecture
 
 - The native C watch app targets `emery` (Pebble Time 2).
