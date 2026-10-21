@@ -124,10 +124,10 @@ function normalizeDirection(merged) {
   return {
     directionId: Number(merged.direction_id) || 0,
     headsign: compact(itinerary.merged_headsign || itinerary.direction_headsign ||
-      itinerary.headsign || 'Direction', 34),
+      itinerary.headsign || 'Direction', 64),
     closestStopId: text(merged.closest_stop && merged.closest_stop.global_stop_id),
     closestStopName: compact(merged.closest_stop && merged.closest_stop.stop_name ||
-      'Nearest stop', 42),
+      'Nearest stop', 64),
     departures: departures,
     stops: (itinerary.stops || []).map(function(stop) {
       return {id: text(stop.global_stop_id), name: compact(stop.stop_name, 42)};
@@ -143,8 +143,7 @@ function normalizeRoutes(body, options) {
   var routes = (body && body.nearby_routes || []).map(function(route) {
     var mode = modeFor(route);
     var name = displayRouteName(route);
-    var directions = (route.merged_itineraries || []).map(normalizeDirection)
-      .filter(function(direction) { return direction.departures.length; });
+    var directions = (route.merged_itineraries || []).map(normalizeDirection);
     return {
       id: text(route.global_route_id),
       name: name,
@@ -166,8 +165,8 @@ function normalizeRoutes(body, options) {
 
   routes.sort(function(a, b) {
     if (a.favorite !== b.favorite) { return a.favorite ? -1 : 1; }
-    var aTime = a.directions[0].departures[0].departureTime || now + 86400;
-    var bTime = b.directions[0].departures[0].departureTime || now + 86400;
+    var aTime = (a.directions[0].departures[0] || {}).departureTime || now + 86400;
+    var bTime = (b.directions[0].departures[0] || {}).departureTime || now + 86400;
     if (aTime !== bTime) { return aTime - bTime; }
     return compareText(a.name, b.name);
   });
@@ -225,10 +224,11 @@ function upcomingStops(body, direction, departure, limit) {
     var scheduledTime = Number(item.departure_time || item.arrival_time) || scheduledAtStart;
     return {
       id: text(item.stop && item.stop.global_stop_id),
-      name: compact(item.stop && item.stop.stop_name || 'Stop', 34),
+      name: compact(item.stop && item.stop.stop_name || 'Stop', 64),
       scheduledTime: scheduledTime,
       time: scheduledTime + offset,
-      realTime: Boolean(departure.realTime)
+      realTime: false,
+      estimated: Boolean(departure.realTime)
     };
   });
 }
@@ -279,7 +279,8 @@ function liveStopTimes(body, routeId, direction, departure, stops) {
       name: stop.name,
       scheduledTime: stop.scheduledTime,
       time: Number(match.departure_time || match.arrival_time) || stop.time,
-      realTime: Boolean(match.is_real_time)
+      realTime: Boolean(match.is_real_time),
+      estimated: false
     };
   });
 }

@@ -1,6 +1,6 @@
 {
   "name": "pebble-transit",
-  "version": "1.7.0",
+  "version": "1.8.0",
   "author": "Pebble Transit",
   "private": true,
   "keywords": ["pebble-app"],
@@ -89,7 +89,14 @@
       "HOME_3_LIVE": 69,
       "HOME_3_COLOR": 70,
       "HOME_3_TEXT_COLOR": 71,
-      "HOME_3_FAVORITE": 72
+      "HOME_3_FAVORITE": 72,
+      "REQUEST_STOPS": 73,
+      "HOME_START": 74,
+      "DATA_UPDATED_AT": 75,
+      "DATA_STATE": 76,
+      "DATA_CACHED": 77,
+      "STOP_LIVE_FLAGS": 78,
+      "STOP_ESTIMATE_FLAGS": 79
     },
     "resources": {
       "media": [
