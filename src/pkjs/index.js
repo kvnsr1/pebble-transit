@@ -1,7 +1,10 @@
 'use strict';
 
 var transit = require('./transit');
-var bundledApiKey = require('./private-key');
+// Cloud builds start from GitHub without the ignored personal key module.
+// A bounded webpack context includes it only when present in a local build.
+var privateKeyFiles = require.context('./', false, /^\.\/private-key\.js$/);
+var bundledApiKey = privateKeyFiles.keys().length ? privateKeyFiles('./private-key.js') : '';
 
 var API_ROOT = 'https://external.transitapp.com/v4/public';
 var CONFIG_URL = 'https://kvnsr1.github.io/pebble-transit/config/';
