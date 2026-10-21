@@ -94,6 +94,8 @@ var body = {nearby_routes: [
   assert.strictEqual(stops[0].time, 2000);
   assert.strictEqual(stops[1].time, 2120);
   assert.strictEqual(stops[0].id, 'BUS:10:stop');
+  assert.strictEqual(stops[0].realTime, false);
+  assert.strictEqual(stops[0].estimated, true);
 })();
 
 (function refreshesSelectedLineAndTripStopsFromLiveStopData() {
@@ -118,6 +120,7 @@ var body = {nearby_routes: [
   var liveStops = transit.liveStopTimes(liveBody, 'BUS:10', direction, departure, stops);
   assert.strictEqual(liveStops[0].time, 2045);
   assert.strictEqual(liveStops[0].realTime, true);
+  assert.strictEqual(liveStops[0].estimated, false);
 })();
 
 (function buildsModeCatalogFromAvailableNetworks() {

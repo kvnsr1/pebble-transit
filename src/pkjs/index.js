@@ -23,14 +23,20 @@ var app = {
   lastLiveRouteId: '',
   requestActive: false,
   detailActive: false,
+  timelineActive: false,
+  tripRequestToken: 0,
   departureIndex: 0,
   stops: [],
   detailLoading: false,
   error: '',
-  updatedAt: '--'
+  updatedAt: '--',
+  dataUpdatedAt: 0,
+  cached: false
 };
 var tripCache = {};
 var liveRefreshTimer = null;
+var messageInFlight = false;
+var pendingMessage = null;
 
 function readJson(key, fallback) {
   try { return JSON.parse(localStorage.getItem(key) || '') || fallback; }
@@ -212,14 +218,46 @@ function formatUpdated() {
 }
 
 function send(payload) {
-  Pebble.sendAppMessage(payload, function() {}, function(error) {
-    console.log('AppMessage failed: ' + JSON.stringify(error));
-  });
+  // Serialize transport writes; rapid navigation coalesces to the latest full view.
+  pendingMessage = payload;
+  if (messageInFlight) { return; }
+  function flush() {
+    if (!pendingMessage) { messageInFlight = false; return; }
+    var next = pendingMessage;
+    pendingMessage = null;
+    messageInFlight = true;
+    Pebble.sendAppMessage(next, flush, function(error) {
+      console.log('AppMessage failed: ' + JSON.stringify(error));
+      flush();
+    });
+  }
+  flush();
 }
 
 function sendError(message) {
   app.error = message;
-  send({IS_LOADING: 0, ERROR_MESSAGE: message.slice(0, 78)});
+  app.cached = app.routes.length > 0;
+  app.routes.forEach(function(route) {
+    route.directions.forEach(function(direction) { direction.cached = true; });
+  });
+  if (app.routes.length) { sendCurrent(); return; }
+  send({IS_LOADING: 0, ERROR_MESSAGE: message.replace(/ Saved departures shown\./g, '').slice(0, 78), HOME_COUNT: 0,
+    LINE_COUNT: 0, DETAIL_ACTIVE: 0, DATA_STATE: stateForError(message),
+    DATA_UPDATED_AT: 0, DATA_CACHED: 0});
+}
+
+// Presentation states only; the existing service errors remain available verbatim.
+function stateForError(message) {
+  if (!message) { return 1; }
+  if (/key|credential/i.test(message)) { return 3; }
+  if (/no .*lines|no nearby/i.test(message)) { return 2; }
+  if (/location/i.test(message)) { return 4; }
+  return 5;
+}
+
+function updateViewport() {
+  // Keep the selection in the middle when possible, without page boundaries.
+  app.pageStart = Math.max(0, Math.min(app.activeIndex - 1, app.routes.length - 3));
 }
 
 function currentRoute() { return app.routes[app.activeIndex] || null; }
@@ -240,10 +278,14 @@ function stopPayload(payload) {
     ['STOP_5_NAME', 'STOP_5_TIME']
   ];
   payload.STOP_COUNT = app.stops.length;
+  payload.STOP_LIVE_FLAGS = 0;
+  payload.STOP_ESTIMATE_FLAGS = 0;
   keys.forEach(function(pair, index) {
     var stop = app.stops[index];
     payload[pair[0]] = stop ? stop.name : '';
     payload[pair[1]] = stop ? stop.time : 0;
+    if (stop && stop.realTime) { payload.STOP_LIVE_FLAGS |= (1 << index); }
+    if (stop && stop.estimated) { payload.STOP_ESTIMATE_FLAGS |= (1 << index); }
   });
   return payload;
 }
@@ -254,6 +296,7 @@ function homePayload(payload) {
   payload.HOME_SELECTED = Math.max(0, app.activeIndex - app.pageStart);
   payload.PAGE_INDEX = Math.floor(app.pageStart / 3);
   payload.PAGE_COUNT = pageCount;
+  payload.HOME_START = app.pageStart;
   for (var index = 0; index < 3; index += 1) {
     var route = app.routes[app.pageStart + index];
     var direction = route && currentDirection(route);
@@ -261,6 +304,7 @@ function homePayload(payload) {
     var prefix = 'HOME_' + (index + 1) + '_';
     payload[prefix + 'ROUTE'] = route ? (route.badge || transit.routeBadge(route.name)) : '';
     payload[prefix + 'HEADSIGN'] = direction ? direction.headsign : '';
+    payload[prefix + 'STOP'] = direction ? direction.closestStopName : '';
     payload[prefix + 'ETA'] = departure ? departure.departureTime : 0;
     payload[prefix + 'LIVE'] = departure && departure.realTime ? 1 : 0;
     payload[prefix + 'COLOR'] = route ? route.routeColor : 0x333333;
@@ -303,7 +347,11 @@ function sendCurrent() {
     DIRECTION_INDEX: directionIndex,
     DIRECTION_COUNT: route.directions.length,
     DETAIL_ACTIVE: app.detailActive ? 1 : 0,
-    DEPARTURE_INDEX: app.departureIndex
+    DEPARTURE_INDEX: app.departureIndex,
+    DATA_UPDATED_AT: Math.floor((app.detailActive ?
+      (direction.observedAt || app.lastRefreshAt) : app.lastRefreshAt) / 1000),
+    DATA_STATE: stateForError(app.error),
+    DATA_CACHED: (app.detailActive ? direction.cached : app.cached) || !!app.error ? 1 : 0
   };
   send(homePayload(stopPayload(payload)));
 }
@@ -357,6 +405,7 @@ function cacheRoutes() {
     routes: app.routes,
     coords: app.lastCoords,
     refreshedAt: app.lastRefreshAt,
+    dataUpdatedAt: app.dataUpdatedAt,
     updatedAt: app.updatedAt
   });
 }
@@ -365,9 +414,15 @@ function loadCachedRoutes() {
   var cache = readJson(CACHE_KEY, null);
   if (!cache || !Array.isArray(cache.routes) || !cache.routes.length) { return; }
   app.routes = cache.routes;
+  app.routes.forEach(function(route) {
+    route.directions.forEach(function(direction) { direction.cached = true; });
+  });
   app.lastCoords = cache.coords || null;
   app.lastRefreshAt = cache.refreshedAt || 0;
   app.updatedAt = cache.updatedAt || '--';
+  app.dataUpdatedAt = cache.dataUpdatedAt || cache.refreshedAt || 0;
+  app.cached = true;
+  updateViewport();
   sendCurrent();
 }
 
@@ -406,6 +461,12 @@ function loadNearby(coords) {
     var selected = currentRoute();
     var currentId = selected && selected.id;
     app.routes = transit.normalizeRoutes(body, config);
+    app.routes.forEach(function(item) {
+      item.directions.forEach(function(direction) {
+        direction.observedAt = app.lastRefreshAt;
+        direction.cached = false;
+      });
+    });
     writeJson(MODES_KEY, transit.modeCatalog(app.routes, availableModes()));
     app.activeIndex = 0;
     if (currentId) {
@@ -418,17 +479,18 @@ function loadNearby(coords) {
       sendError('No enabled transit lines found within ' + config.radius + ' m.');
       return;
     }
-    app.pageStart = Math.floor(app.activeIndex / 3) * 3;
+    updateViewport();
     app.lastLiveRefreshAt = Date.now();
     app.lastLiveRouteId = currentRoute().id;
+    app.dataUpdatedAt = app.lastRefreshAt;
+    app.cached = false;
     app.error = '';
     cacheRoutes();
     sendCurrent();
     refreshModeCatalog(coords);
   }, function(message) {
     app.requestActive = false;
-    if (app.routes.length) { app.error = message; sendCurrent(); }
-    else { sendError(message); }
+    sendError(message);
   });
 }
 
@@ -440,8 +502,7 @@ function refreshSelectedLine(force) {
     sendCurrent();
     return;
   }
-  if (!force && app.lastLiveRouteId === route.id &&
-      Date.now() - app.lastLiveRefreshAt < REFRESH_MS - 2000) {
+  if (!force && Date.now() - app.lastLiveRefreshAt < REFRESH_MS - 2000) {
     sendCurrent();
     return;
   }
@@ -452,8 +513,6 @@ function refreshSelectedLine(force) {
       if (stop.id && stopIds.indexOf(stop.id) === -1) { stopIds.push(stop.id); }
     });
   }
-  var selected = selectedDeparture();
-  var selectedTripKey = selected && selected.tripSearchKey;
   app.requestActive = true;
   requestJson('/stop_departures', {
     global_stop_ids: stopIds.join(','),
@@ -464,12 +523,15 @@ function refreshSelectedLine(force) {
     stop_detailed: false
   }, function(body) {
     app.requestActive = false;
+    var sameContext = currentRoute() === route && currentDirection() === direction;
+    var activeDeparture = sameContext && selectedDeparture();
+    var activeTripKey = activeDeparture && activeDeparture.tripSearchKey;
     var live = transit.liveDepartures(body, route.id, direction);
     if (live.length) {
       direction.departures = live;
-      if (app.detailActive && selectedTripKey) {
+      if (sameContext && app.detailActive && activeTripKey) {
         live.some(function(departure, index) {
-          if (departure.tripSearchKey === selectedTripKey) {
+          if (departure.tripSearchKey === activeTripKey) {
             app.departureIndex = index;
             return true;
           }
@@ -478,20 +540,22 @@ function refreshSelectedLine(force) {
       }
     }
     var currentDeparture = selectedDeparture();
-    if (app.detailActive && app.stops.length) {
+    if (sameContext && app.detailActive && app.stops.length) {
       app.stops = transit.liveStopTimes(body, route.id, direction,
         currentDeparture, app.stops);
     }
     app.lastLiveRefreshAt = Date.now();
     app.lastLiveRouteId = route.id;
     app.updatedAt = formatUpdated();
+    app.dataUpdatedAt = Date.now();
+    direction.observedAt = app.dataUpdatedAt;
+    direction.cached = false;
     app.error = '';
     cacheRoutes();
     sendCurrent();
   }, function(message) {
     app.requestActive = false;
-    app.error = message;
-    sendCurrent();
+    sendError(message);
   });
 }
 
@@ -532,18 +596,23 @@ function refresh(force) {
 function moveSelection(delta) {
   if (!app.routes.length) { return; }
   app.activeIndex = (app.activeIndex + delta + app.routes.length) % app.routes.length;
-  app.pageStart = Math.floor(app.activeIndex / 3) * 3;
+  updateViewport();
   app.departureIndex = 0;
   app.stops = [];
+  app.tripRequestToken++;
+  app.detailLoading = false;
   app.error = '';
   sendCurrent();
 }
 
-function changeDirection() {
+function changeDirection(keepDetails) {
   var route = currentRoute();
   if (!route) { return; }
   app.directions[route.id] = ((app.directions[route.id] || 0) + 1) % route.directions.length;
-  app.detailActive = false;
+  app.detailActive = !!keepDetails;
+  app.timelineActive = false;
+  app.tripRequestToken++;
+  app.detailLoading = false;
   app.departureIndex = 0;
   app.stops = [];
   app.error = '';
@@ -558,6 +627,7 @@ function selectedDeparture() {
 function loadTripDetails(refreshLive) {
   var direction = currentDirection();
   var departure = selectedDeparture();
+  var requestToken = ++app.tripRequestToken;
   app.stops = [];
   if (!direction || !departure || !departure.tripSearchKey) {
     app.detailLoading = false;
@@ -579,28 +649,35 @@ function loadTripDetails(refreshLive) {
     include_continuation: false
   }, function(body) {
     tripCache[departure.tripSearchKey] = {body: body, loadedAt: Date.now()};
+    if (requestToken !== app.tripRequestToken || !app.timelineActive) { return; }
     app.stops = transit.upcomingStops(body, direction, departure, 5);
     app.detailLoading = false;
     app.error = '';
     sendCurrent();
     if (refreshLive) { scheduleLiveRefresh(true); }
   }, function(message) {
+    if (requestToken !== app.tripRequestToken || !app.timelineActive) { return; }
     app.detailLoading = false;
-    app.error = message;
-    sendCurrent();
+    sendError(message);
   });
 }
 
 function openDetails() {
   if (!currentRoute()) { return; }
   app.detailActive = true;
+  app.timelineActive = false;
   app.departureIndex = 0;
   app.error = '';
-  loadTripDetails(true);
+  app.stops = [];
+  app.detailLoading = false;
+  sendCurrent();
+  scheduleLiveRefresh(false);
 }
 
 function closeDetails() {
   app.detailActive = false;
+  app.timelineActive = false;
+  app.tripRequestToken++;
   app.detailLoading = false;
   app.stops = [];
   if (liveRefreshTimer) {
@@ -615,7 +692,8 @@ function cycleDeparture(delta) {
   if (!direction || !direction.departures.length) { return; }
   app.departureIndex = (app.departureIndex + delta + direction.departures.length) %
     direction.departures.length;
-  loadTripDetails(false);
+  if (app.timelineActive) { loadTripDetails(false); }
+  else { app.stops = []; sendCurrent(); }
 }
 
 function toggleFavorite() {
@@ -638,7 +716,12 @@ Pebble.addEventListener('ready', function() {
 Pebble.addEventListener('appmessage', function(event) {
   var payload = event.payload;
   if (payload.REQUEST_ROW_DELTA) { moveSelection(Number(payload.REQUEST_ROW_DELTA)); }
-  else if (payload.REQUEST_DIRECTION) { changeDirection(); }
+  else if (payload.REQUEST_DIRECTION) { changeDirection(Number(payload.REQUEST_DIRECTION) === 2); }
+  else if (payload.REQUEST_STOPS) {
+    app.timelineActive = Number(payload.REQUEST_STOPS) !== 2;
+    if (app.timelineActive && app.detailActive) { loadTripDetails(false); }
+    else { app.tripRequestToken++; app.detailLoading = false; sendCurrent(); }
+  }
   else if (payload.REQUEST_DETAILS) {
     if (Number(payload.REQUEST_DETAILS) === 2) { closeDetails(); }
     else { openDetails(); }

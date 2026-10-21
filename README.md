@@ -1,6 +1,8 @@
 # Pebble Transit
 
-Pebble Transit is a Pebble Time 2 companion for nearby public transportation. It mirrors the glanceable part of Transit’s Nearby screen with three route-colored nearby lines per page, directions, and live departure countdowns. A detail view shows the next three departures and the upcoming stops for the selected trip.
+Pebble Transit is a native Pebble Time 2 companion for nearby public transportation. This prototype adapts [Transit for Apple Watch](https://help.transitapp.com/article/210-use-transit-on-apple-watch) to Emery's 200 × 228 display and physical buttons: a dark, scrolling nearby list, route-colored departure boards with oversized countdowns, and an interactive stop timeline.
+
+See the [design and architecture audit](docs/prototype/design.md), [actual emulator screenshot gallery and validation report](docs/prototype/README.md), and [test instructions](#tests).
 
 Home route badges use at most three bold characters. Short route numbers and letters are preserved, directional names use familiar initials such as `E` for East, and longer multi-word names use contextual initials such as `VN` for Van Nuys.
 
@@ -11,7 +13,7 @@ The watch launcher and mobile Pebble app share the same transparent, borderless 
 - The native C watch app targets `emery` (Pebble Time 2).
 - PebbleKit JS runs in the Pebble phone app, requests the phone’s current location, calls Transit’s stable v4 API, caches the last successful nearby response, and sends compact messages to the watch.
 - The hosted `config/` page controls Transit API credentials, nearby radius, API-provided transit mode classifications, and favorite lines.
-- Live nearby data is refreshed no more than once per minute while the app is open. The animated signal indicates a real-time prediction; `SCHED` indicates a static timetable departure.
+- Live nearby data is refreshed no more than once per minute while the app is open. `Live` and a static signal glyph indicate a fresh real-time prediction; `Sched` indicates a timetable departure. `Saved` indicates cached data, an unavailable phone, or a prediction older than two minutes. Estimated downstream times are explicitly labeled.
 
 The watch has no direct internet or GPS connection, so fresh data requires the paired phone. Cached departures remain visible through a temporary network or location failure.
 
@@ -50,7 +52,7 @@ The build script creates the ignored key module when it does not exist. To repla
 
 Because PebbleKit JS makes requests from the phone, a credential bundled into a `.pbw` can ultimately be extracted. Use this design for a personal build. A broadly distributed build should send requests through a small authenticated proxy with its own per-user controls.
 
-Transit’s free access is currently limited to five requests per minute and 1,500 per month. On the homepage, Pebble Transit refreshes all nearby lines together with one `/nearby_routes` request per minute. Paging and changing the highlighted line use that cached response and make no requests. In a detail view, the selected line refreshes once per minute through `/stop_departures`; that single live request also includes the displayed downstream stops. Mode discovery is weekly and `/trip_details` is requested only when a departure’s stop detail is needed.
+Transit’s free access is currently limited to five requests per minute and 1,500 per month. On the homepage, Pebble Transit refreshes all nearby lines together with one `/nearby_routes` request per minute. Scrolling and changing direction use that cached response and make no requests. In a detail view, the selected line refreshes once per minute through `/stop_departures`; that single live request also includes the displayed downstream stops. Mode discovery is weekly and `/trip_details` is requested only when a departure’s stop detail is needed.
 
 ## Publish the settings page
 
@@ -64,21 +66,17 @@ GitHub Pages publishes the settings page from this repository’s `main` branch.
 
 ## Controls
 
-### Nearby lines
+| Screen | Up | Select | Down | Hold Select | Hold Up | Back |
+| --- | --- | --- | --- | --- | --- | --- |
+| Nearby | Previous route | Open departures | Next route | Other direction | Pin/unpin | Exit |
+| Departures | Next departure | Other direction | Open trip stops | Other direction | Pin/unpin | Nearby |
+| Trip stops | Previous stop | Next departure | Next stop | — | — | Departures |
 
-- **Up / Down:** move the highlight line by line. Moving beyond the top or bottom row automatically reveals the previous or next group of three.
-- **Select:** switch the highlighted line’s direction using already-loaded nearby data.
-- **Hold Select:** open the highlighted line’s next-three-departures view.
-- **Hold Up:** pin or unpin the highlighted line. Nearby pinned lines sort first after the next refresh.
-- **Back:** exit.
+The route list scrolls one row at a time, keeping the selection near the middle. Nearby pinned routes sort first on refresh. Primary navigation uses short presses. On an empty/error screen, Select retries within the refresh budget. A route with only one direction stays on that direction.
 
-### Line details
+The board emphasizes the selected departure and shows the other two underneath. Up cycles only the departures that exist. Down loads stops for that departure; Select on the timeline cycles departures and loads their stops. The timeline shows three readable rows at a time, with all five available stops accessible using Up/Down. The selected stop expands to reveal its name and arrival time.
 
-- **Select:** cycle the highlighted departure among the next three.
-- **Up / Down:** toggle between the departure board and upcoming stops for the highlighted trip.
-- **Back:** return to nearby lines.
-
-Stop ETAs use Transit’s live stop-departure data when available, with the selected trip’s real-time offset as a fallback. The stop timeline displays clock times, while the home and departure-board countdowns display whole elapsed minutes without rounding partial minutes upward.
+Stop ETAs use Transit's live stop-departure data when available, with the selected trip's real-time offset as a fallback. The timeline distinguishes live stop times, estimates from a trip, scheduled times, and saved information. Times follow the watch's 12/24-hour preference. Countdowns use elapsed whole minutes; expired departures become `LEFT` instead of remaining `NOW` indefinitely.
 
 ## Configuration
 
@@ -93,10 +91,34 @@ Mode names are initially seeded from the GTFS route classifications, then replac
 
 ## Tests
 
-Run the data-mapping tests with:
+Run the original data tests and companion integration tests:
 
 ```sh
 node test/transit.test.js
+node test/companion.test.js
 ```
+
+If Node is not on your shell path, use `./.tools/node/bin/node`. Test pure native presentation rules with the host C compiler:
+
+```sh
+cc -std=c11 -Wall -Wextra -Werror test/presentation.test.c src/c/presentation.c -o /tmp/transit-presentation-test
+/tmp/transit-presentation-test
+```
+
+Build and run the normal live companion with the existing scripts above. For reproducible visual testing without an API key, use the isolated fixture runner after building:
+
+```sh
+./.tools/uv-tools/pebble-tool/bin/python scripts/prototype-emulator.py
+```
+
+The runner uses the shared repository toolchain, a temporary Emery flash file, an unused loopback port, and the production native binary. It executes the actual companion JavaScript with synthetic Transit v4 responses and simulated phone APIs, checks physical button messages, and captures real 200 × 228 emulator screenshots. It never reads `private-key.js`, calls Transit, modifies an existing emulator, or puts fixture data into the production PBW. On another SDK layout, pass `--sdk-root /path/to/SDK` and run with a Python environment containing the Pebble SDK's `libpebble2` and Pillow packages. Use `--output /tmp/transit-screenshots` to keep new captures out of the working tree.
+
+To disable finite selection animations at build time:
+
+```sh
+CFLAGS='-DTRANSIT_DISABLE_ANIMATION' ./scripts/build.sh
+```
+
+Run `./scripts/build.sh` again without `CFLAGS` to restore the normal prototype. Static screens never use a continuous animation timer.
 
 API reference: [Transit API v4](https://api-doc.transitapp.com/v4.html)
