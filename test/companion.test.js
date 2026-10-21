@@ -188,4 +188,18 @@ test('navigation cannot turn an offline cached response back into a live one', f
   c.message({REQUEST_DIRECTION: 2});
   assert.strictEqual(c.latest().DATA_CACHED, 1);
 });
+test('an absent optional key module still starts and requests phone configuration', function() {
+  var c = ready({scenario: 'key'});
+  assert.strictEqual(c.latest().DATA_STATE, 3);
+  assert.strictEqual(c.requests.length, 0);
+});
+
+test('an optional bundled key still works without changing saved settings', function() {
+  var c = ready({scenario: 'key', bundledKey: 'synthetic-bundled-key'});
+  assert.strictEqual(c.latest().DATA_STATE, 1);
+  assert.strictEqual(c.latest().HOME_COUNT, 3);
+  assert.strictEqual(c.requests.length, 1);
+  assert.strictEqual(c.context.settings().apiKey, 'synthetic-bundled-key');
+  assert.strictEqual(c.storage['pebbleTransit.settings'], undefined);
+});
 console.log(count + ' companion integration tests passed');

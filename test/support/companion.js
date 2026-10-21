@@ -43,7 +43,6 @@ module.exports = function companion(options) {
   var context = {
     console: {log: function() {}}, Date: Clock, XMLHttpRequest: XHR,
     require: function(name) {
-      if (name === './private-key') { return ''; } // Never read a local private key.
       if (name === './transit') { return transit; }
       throw new Error('Unexpected module: ' + name);
     },
@@ -71,6 +70,12 @@ module.exports = function companion(options) {
     },
     setTimeout: function(callback, delay) { var timer = {callback: callback, at: now + delay}; timers.push(timer); return timer; },
     clearTimeout: function(timer) { timers = timers.filter(function(item) { return item !== timer; }); }
+  };
+  // Match the optional webpack context without ever reading a personal key file.
+  context.require.context = function() {
+    var files = function() { return options.bundledKey || ''; };
+    files.keys = function() { return options.bundledKey ? ['./private-key.js'] : []; };
+    return files;
   };
   vm.createContext(context);
   vm.runInContext(fs.readFileSync(path.join(__dirname, '../../src/pkjs/index.js'), 'utf8'), context);

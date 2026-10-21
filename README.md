@@ -48,7 +48,7 @@ The personal API key is kept in the ignored file `src/pkjs/private-key.js`; it i
 TRANSIT_API_KEY='your_key' ./scripts/build.sh
 ```
 
-The build script creates the ignored key module when it does not exist. To replace an existing bundled key, remove that local file and rebuild with `TRANSIT_API_KEY` set, or enter a replacement in phone settings. The settings page never receives the saved key; it only receives a boolean indicating that one exists.
+The build script creates the ignored key module when it does not exist. The module is optional: direct `pebble build` and cloud builds from GitHub work without it, and the app prompts for a key in phone settings. To replace an existing bundled key, remove that local file and rebuild with `TRANSIT_API_KEY` set, or enter a replacement in phone settings. The settings page never receives the saved key; it only receives a boolean indicating that one exists.
 
 Because PebbleKit JS makes requests from the phone, a credential bundled into a `.pbw` can ultimately be extracted. Use this design for a personal build. A broadly distributed build should send requests through a small authenticated proxy with its own per-user controls.
 
